@@ -1,4 +1,4 @@
-# skill/bin/jarvis-debrief.ps1 — run by Task Scheduler at 08:30 (or manually from a NORMAL terminal).
+# skill/bin/jarvis-debrief.ps1 - run by Task Scheduler at 08:30 (or manually from a NORMAL terminal).
 $ErrorActionPreference = 'Stop'
 $vault    = 'C:\Users\Alex\ObsidianVault\claude-memory\12-jarvis'
 $skillDir = Join-Path $HOME '.claude\skills\jarvis'
@@ -36,7 +36,7 @@ try {
   # HARD success check: the note must have been (re)written DURING this run, not merely exist.
   $freshEnough = (Test-Path $note) -and ((Get-Item $note).LastWriteTime -ge $runStart.AddSeconds(-2))
   if (-not $freshEnough) {
-    throw "headless generation produced no fresh note (see .jarvis-claude.log) — not sending a stale debrief"
+    throw "headless generation produced no fresh note (see .jarvis-claude.log) - not sending a stale debrief"
   }
 
   & powershell -NoProfile -File $sender -NotePath $note
