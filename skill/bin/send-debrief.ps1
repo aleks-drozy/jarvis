@@ -10,7 +10,9 @@ $ErrorActionPreference = 'Stop'
 
 function Build-DebriefMail {
   param([string]$NotePath, [string]$ToAddress)
-  $body = Get-Content -LiteralPath $NotePath -Raw
+  $body = Get-Content -LiteralPath $NotePath -Raw -Encoding UTF8
+  # strip the YAML frontmatter block so the email opens at the greeting, not "--- project: ..."
+  $body = [regex]::Replace($body, '(?s)\A\s*---\r?\n.*?\r?\n---\r?\n', '').TrimStart()
   $date = [IO.Path]::GetFileNameWithoutExtension($NotePath)
   return @{ To = $ToAddress; Subject = "[JARVIS] Morning debrief - $date"; Body = $body }
 }
@@ -27,7 +29,7 @@ function Send-Debrief {
   $mail = Build-DebriefMail -NotePath $NotePath -ToAddress $ToAddress
   $cred = Get-AppPassword
   Send-MailMessage -From $cred.UserName -To $mail.To -Subject $mail.Subject -Body $mail.Body `
-    -SmtpServer 'smtp.gmail.com' -Port 587 -UseSsl -Credential $cred
+    -SmtpServer 'smtp.gmail.com' -Port 587 -UseSsl -Credential $cred -Encoding ([System.Text.Encoding]::UTF8)
 }
 
 if ($DotSourceOnly) { return }
