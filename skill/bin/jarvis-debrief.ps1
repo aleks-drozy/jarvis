@@ -21,6 +21,16 @@ try {
   $runStart = Get-Date
   "$($runStart.ToString('s')) run start" | Add-Content $log
 
+  # Headless auth: feed Claude the long-lived subscription token created by 'claude setup-token'.
+  # Stored DPAPI-encrypted at ~/.jarvis/claude-token.xml (never in the repo/vault).
+  $tokFile = Join-Path $HOME '.jarvis\claude-token.xml'
+  if (Test-Path $tokFile) {
+    $sec = Import-Clixml $tokFile
+    $env:CLAUDE_CODE_OAUTH_TOKEN = (New-Object System.Management.Automation.PSCredential('t', $sec)).GetNetworkCredential().Password
+  } else {
+    throw "no Claude token at $tokFile - run 'claude setup-token' then store it (see setup)"
+  }
+
   # Self-contained prompt: do NOT rely on the "/jarvis" slash-command triggering in headless -p mode.
   # Point Claude straight at the skill files and have it execute the procedure, writing the note.
   $prompt = "You are running headlessly as Jarvis (no human present; do not ask questions). " +
