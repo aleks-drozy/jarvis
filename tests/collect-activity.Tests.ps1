@@ -15,4 +15,12 @@ $c = Get-RecentCommits -RepoPath (@($repos | Where-Object { $_ -match 'personal-
 Assert ($c.Count -ge 1) "expected commits in personal-performance-os"
 Assert ($c[0].Hash -and $c[0].Subject) "commit must have Hash and Subject"
 
+# Full-run JSON shape: Commits must ALWAYS be an array (0/1/many) so consumers can rely on .Commits[]
+$json = & powershell -NoProfile -File "$PSScriptRoot\..\skill\bin\collect-activity.ps1" -SinceHours 999999 | Out-String | ConvertFrom-Json
+Assert ($json.Repos.Count -ge 1) "full run should discover repos"
+foreach ($repo in $json.Repos) {
+  Assert ($repo.Commits -is [array]) "Commits must be an array for $($repo.Repo) (got $($repo.Commits.GetType().Name))"
+}
+Assert ($json.Transcripts -is [array]) "Transcripts must be an array"
+
 Write-Host "collect-activity: ALL PASS"

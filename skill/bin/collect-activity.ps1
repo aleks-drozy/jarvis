@@ -48,15 +48,17 @@ function Get-RecentTranscripts {
 
 if ($DotSourceOnly) { return }
 
-$since = (Get-Date).AddHours(-$SinceHours).ToString('yyyy-MM-dd')
+# ISO datetime (hour precision) so the git window matches the transcript window exactly
+$since = (Get-Date).AddHours(-$SinceHours).ToString('s')
 $repos = Get-GitRepos -Root $ProjectsDir -MaxDepth 3
 $activity = foreach ($r in $repos) {
   $commits = Get-RecentCommits -RepoPath $r -Since $since
-  [pscustomobject]@{ Repo = (Split-Path $r -Leaf); Path = $r; Commits = $commits }
+  # @() keeps Commits a JSON array for 0/1/many so consumers can rely on .Commits[]
+  [pscustomobject]@{ Repo = (Split-Path $r -Leaf); Path = $r; Commits = @($commits) }
 }
 [pscustomobject]@{
   GeneratedAt = (Get-Date).ToString('s')
   SinceHours  = $SinceHours
   Repos       = @($activity)
-  Transcripts = Get-RecentTranscripts -Dir $TranscriptsDir -SinceHours $SinceHours
+  Transcripts = @(Get-RecentTranscripts -Dir $TranscriptsDir -SinceHours $SinceHours)
 } | ConvertTo-Json -Depth 6

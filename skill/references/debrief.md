@@ -14,15 +14,17 @@ Produce a debrief that opens with the answer to "what should I do today", then c
    source (commit hash, note, tracker row); every enabled section is present.
 6. Write to `C:\Users\Alex\ObsidianVault\claude-memory\12-jarvis\debriefs\YYYY-MM-DD.md`. If it already
    exists, update in place and append "(re-run HH:MM)" — do not duplicate SUGGESTIONS entries (key by date).
-7. Append ≤1 fresh suggestion to `SUGGESTIONS.md` as `### YYYY-MM-DD — <idea>` (skip if today's exists).
+7. Append ≤1 fresh suggestion to `C:\Users\Alex\ObsidianVault\claude-memory\12-jarvis\SUGGESTIONS.md` as `### YYYY-MM-DD — <idea>` (skip if today's exists).
+
+All vault paths below are absolute (the Bash/Read tools run from the Desktop cwd, so relative paths do not resolve).
 
 ## Module playbooks
 - **📅 Today (v1.1):** Calendar read; list today's events; flag conflicts and travel gaps. If off/unreachable → "⚠️ Calendar — connect to enable".
 - **📬 Inbox (v1.1):** Gmail read; sender + subject + neutral 1-line gist only; suppress sensitive (Safety 5). If off/unreachable → "⚠️ Inbox — connect to enable".
-- **🚧 Projects & agents:** run `bin/collect-activity.ps1 -SinceHours 24` via Bash (PowerShell); report commits (with 8-char hash), repos with no commits in >7 days (stale), and what recent Claude sessions touched (from Transcripts + vault SESSION_NOTES). Cite hashes.
-- **💼 Job search:** read `JOB_SEARCH.md`; next application(s), any follow-ups whose due date ≤ today, one LinkedIn move. If empty, say so and prompt Alex to add targets.
-- **🏋️ Life & discipline:** read `Life Roadmap 2026-2027/_INDEX.md` (phase) and the weekly-review due date; one line each on physical / mental / learning vs the charter goals; nudge if the weekly review is overdue (escalate tone if it's been overdue multiple debriefs).
-- **💰 Finance:** read `FINANCE.md`; goal vs current manual numbers; one nudge. Never a transaction.
+- **🚧 Projects & agents:** run `powershell -NoProfile -File C:\Users\Alex\.claude\skills\jarvis\bin\collect-activity.ps1 -SinceHours 24` via Bash; report commits (with 8-char hash), repos with no commits in >7 days (stale), and what recent Claude sessions touched (from the JSON `Transcripts` + vault SESSION_NOTES). Cite hashes.
+- **💼 Job search:** read `C:\Users\Alex\ObsidianVault\claude-memory\12-jarvis\JOB_SEARCH.md`; next application(s), any follow-ups whose due date ≤ today, one LinkedIn move. If empty, say so and prompt Alex to add targets.
+- **🏋️ Life & discipline:** read `C:\Users\Alex\ObsidianVault\Life Roadmap 2026-2027\_INDEX.md` (phase) and the weekly-review due date; one line each on physical / mental / learning vs the charter goals; nudge if the weekly review is overdue (escalate tone if it's been overdue multiple debriefs).
+- **💰 Finance:** read `C:\Users\Alex\ObsidianVault\claude-memory\12-jarvis\FINANCE.md`; goal vs current manual numbers; one nudge. Never a transaction.
 - **💡 Suggestion:** from today's project/job activity + charter goals, one concrete idea (bias toward portfolio projects that get noticed by Dublin AI/SWE employers).
 
 ## Output template
