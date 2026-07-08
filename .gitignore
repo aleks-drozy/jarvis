@@ -1,0 +1,6 @@
+# never commit secrets or local runtime artifacts
+*.log
+*.pid
+.env
+.env.*
+tests/_tmp/
