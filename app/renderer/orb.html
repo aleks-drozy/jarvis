@@ -1,0 +1,72 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  html, body { background: transparent; overflow: hidden; height: 100%; }
+  body { display: grid; place-items: center; cursor: pointer; -webkit-user-select: none; }
+  #wrap { position: relative; width: 120px; height: 120px; }
+  svg { position: absolute; inset: 0; overflow: visible; }
+  .ring  { fill: none; stroke: #6fd3ff; }
+  #core  {
+    position: absolute; inset: 38px; border-radius: 50%;
+    background: radial-gradient(circle, rgba(111,211,255,0.85) 0%, rgba(111,211,255,0.25) 55%, transparent 75%);
+    filter: blur(1px);
+    transition: transform 60ms linear, opacity 200ms ease;
+  }
+  #r1 { opacity: 0.9; }
+  #r2 { opacity: 0.45; animation: spin 24s linear infinite; transform-origin: 60px 60px; }
+  #r3 { opacity: 0.25; animation: spin 60s linear infinite reverse; transform-origin: 60px 60px; }
+  @keyframes spin { to { transform: rotate(360deg); } }
+  /* idle breath */
+  #wrap { animation: breathe 5s ease-in-out infinite; }
+  @keyframes breathe { 0%,100% { filter: drop-shadow(0 0 6px rgba(111,211,255,0.35)); } 50% { filter: drop-shadow(0 0 16px rgba(111,211,255,0.6)); } }
+  @media (prefers-reduced-motion: reduce) { #r2, #r3, #wrap { animation: none; } }
+</style>
+</head>
+<body title="Jarvis - click to summon">
+  <div id="wrap">
+    <svg viewBox="0 0 120 120">
+      <circle id="r1" class="ring" cx="60" cy="60" r="52" stroke-width="1.5"
+        stroke-dasharray="2 4" />
+      <circle id="r2" class="ring" cx="60" cy="60" r="44" stroke-width="1"
+        stroke-dasharray="30 14 6 14" />
+      <circle id="r3" class="ring" cx="60" cy="60" r="34" stroke-width="3"
+        stroke-dasharray="1 7" />
+    </svg>
+    <div id="core"></div>
+  </div>
+  <audio id="player"></audio>
+<script>
+  const core = document.getElementById('core');
+  const player = document.getElementById('player');
+
+  // voice-reactive pulse: the orb breathes with Andrew's voice
+  let analyser = null;
+  function wireAnalyser() {
+    if (analyser) return;
+    const ctx = new AudioContext();
+    const src = ctx.createMediaElementSource(player);
+    analyser = ctx.createAnalyser();
+    analyser.fftSize = 64;
+    src.connect(analyser); analyser.connect(ctx.destination);
+    const data = new Uint8Array(analyser.frequencyBinCount);
+    (function pulse() {
+      analyser.getByteFrequencyData(data);
+      const level = data.reduce((a, b) => a + b, 0) / data.length / 255;
+      core.style.transform = `scale(${1 + level * 0.9})`;
+      requestAnimationFrame(pulse);
+    })();
+  }
+
+  window.jarvis.onPlayAudio((file) => {
+    wireAnalyser();
+    player.src = 'file:///' + String(file).replace(/\\/g, '/');
+    player.play().catch(() => {});
+  });
+
+  document.body.addEventListener('click', () => window.jarvis.summonToggle());
+</script>
+</body>
+</html>

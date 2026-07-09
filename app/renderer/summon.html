@@ -1,0 +1,255 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<style>
+  :root {
+    --cy: #6fd3ff; --cy-dim: rgba(111,211,255,0.35); --amber: #ffb454;
+    --stagger-dur: 500ms; --stagger-distance: 12px; --stagger-stagger: 40ms;
+    --stagger-blur: 3px; --stagger-ease: cubic-bezier(0.22, 1, 0.36, 1);
+  }
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  html, body { height: 100%; overflow: hidden; background: transparent; }
+  body {
+    font-family: "Bahnschrift Light", Bahnschrift, "Segoe UI", sans-serif;
+    color: #dff3ff; -webkit-user-select: none;
+  }
+  /* the veil: desktop dims, lights go down */
+  #veil {
+    position: absolute; inset: 0;
+    background: radial-gradient(1400px 900px at 50% 40%, rgba(6,12,18,0.82) 0%, rgba(2,5,8,0.93) 70%);
+    backdrop-filter: blur(7px);
+    opacity: 0; transition: opacity 420ms ease;
+  }
+  body.on #veil { opacity: 1; }
+  /* scanlines + slow radar sweep */
+  #veil::before {
+    content: ""; position: absolute; inset: 0; pointer-events: none;
+    background: repeating-linear-gradient(0deg, transparent 0 2px, rgba(111,211,255,0.014) 2px 4px);
+  }
+  #sweep {
+    position: absolute; inset: -20%; pointer-events: none; opacity: 0.05;
+    background: conic-gradient(from 0deg, transparent 0deg, var(--cy) 8deg, transparent 30deg);
+    animation: sweep 14s linear infinite;
+  }
+  @keyframes sweep { to { transform: rotate(360deg); } }
+
+  /* corner brackets */
+  .corner { position: absolute; width: 46px; height: 46px; border: 1px solid var(--cy-dim); pointer-events: none; }
+  .tl { top: 26px; left: 26px; border-right: 0; border-bottom: 0; }
+  .tr { top: 26px; right: 26px; border-left: 0; border-bottom: 0; }
+  .bl { bottom: 26px; left: 26px; border-right: 0; border-top: 0; }
+  .br { bottom: 26px; right: 26px; border-left: 0; border-top: 0; }
+
+  /* transitions.dev texts-reveal */
+  .t-stagger-line {
+    display: block; opacity: 0;
+    transform: translateY(var(--stagger-distance));
+    filter: blur(var(--stagger-blur));
+    transition: opacity var(--stagger-dur) var(--stagger-ease),
+      transform var(--stagger-dur) var(--stagger-ease), filter var(--stagger-dur) var(--stagger-ease);
+    will-change: transform, opacity, filter;
+  }
+  body.on .t-stagger-line { opacity: 1; transform: translateY(0); filter: blur(0); }
+  .d1 { transition-delay: 60ms; } .d2 { transition-delay: 140ms; } .d3 { transition-delay: 220ms; }
+  .d4 { transition-delay: 300ms; } .d5 { transition-delay: 380ms; }
+  @media (prefers-reduced-motion: reduce) { .t-stagger-line { transition: none !important; } #sweep { animation: none; } }
+
+  /* center column */
+  #center {
+    position: absolute; left: 50%; top: 34%; transform: translate(-50%, -50%);
+    text-align: center; max-width: 760px; width: 90%;
+  }
+  #clock { font-size: 13px; letter-spacing: 0.6em; text-indent: 0.6em; color: var(--cy-dim); margin-bottom: 14px; }
+  #greet { font-size: 34px; font-weight: 300; letter-spacing: 0.14em; text-shadow: 0 0 22px rgba(111,211,255,0.35); margin-bottom: 26px; }
+  .focus { font-size: 15.5px; font-weight: 300; letter-spacing: 0.06em; color: #bfe2f5; padding: 7px 0; }
+  .focus::before { content: "\2726\00a0\00a0"; color: var(--cy); font-size: 11px; }
+
+  /* left: day arc */
+  #dayarc { position: absolute; left: 40px; top: 50%; transform: translateY(-50%); }
+  #dayarc text { fill: #9fc7dc; font-size: 10px; letter-spacing: 0.15em; font-family: inherit; }
+  #dayarc .evlabel { fill: #dff3ff; font-size: 11px; }
+
+  /* right: allowance ring */
+  #money { position: absolute; right: 56px; top: 50%; transform: translateY(-50%); text-align: center; }
+  #money svg { overflow: visible; }
+  #allow { font-size: 26px; font-weight: 300; fill: #dff3ff; letter-spacing: 0.05em; }
+  #allowsub { font-size: 9px; fill: #9fc7dc; letter-spacing: 0.3em; }
+
+  /* bottom: jobs constellation + command line */
+  #jobs { position: absolute; left: 50%; bottom: 148px; transform: translateX(-50%); display: flex; gap: 18px; }
+  .jdot { display: flex; flex-direction: column; align-items: center; gap: 6px; font-size: 9px; letter-spacing: 0.2em; color: #9fc7dc; text-transform: uppercase; }
+  .jdot i { width: 9px; height: 9px; border-radius: 50%; background: var(--cy); box-shadow: 0 0 10px var(--cy); }
+  .jdot.closed i { background: #45606f; box-shadow: none; }
+  .jdot.due i { background: var(--amber); box-shadow: 0 0 10px var(--amber); }
+
+  #cmdwrap { position: absolute; left: 50%; bottom: 72px; transform: translateX(-50%); width: min(620px, 80vw); }
+  #reply { min-height: 22px; text-align: center; font-size: 14px; color: #bfe2f5; margin-bottom: 14px; letter-spacing: 0.04em; }
+  #reply.shimmer {
+    background: linear-gradient(100deg, #56788c 40%, #eaf7ff 50%, #56788c 60%);
+    background-size: 200% 100%; -webkit-background-clip: text; background-clip: text; color: transparent;
+    animation: sh 1.6s linear infinite;
+  }
+  @keyframes sh { from { background-position: 200% 0; } to { background-position: -200% 0; } }
+  #cmdline { display: flex; align-items: center; gap: 10px; border-bottom: 1px solid var(--cy-dim); padding-bottom: 8px; }
+  #cmdline .chev { color: var(--cy); font-size: 15px; }
+  #cmd {
+    flex: 1; background: transparent; border: 0; outline: 0; color: #eaf7ff;
+    font: 300 16px "Bahnschrift Light", Bahnschrift, "Segoe UI", sans-serif; letter-spacing: 0.05em;
+  }
+  #hint { text-align: center; margin-top: 12px; font-size: 10px; letter-spacing: 0.35em; color: rgba(159,199,220,0.5); }
+</style>
+</head>
+<body>
+  <div id="veil"><div id="sweep"></div></div>
+  <div class="corner tl"></div><div class="corner tr"></div>
+  <div class="corner bl"></div><div class="corner br"></div>
+
+  <div id="center">
+    <div id="clock" class="t-stagger-line"></div>
+    <div id="greet" class="t-stagger-line d1">JARVIS</div>
+    <div id="focus"></div>
+  </div>
+
+  <svg id="dayarc" class="t-stagger-line d3" width="150" height="460" viewBox="0 0 150 460"></svg>
+
+  <div id="money" class="t-stagger-line d4">
+    <svg width="170" height="170" viewBox="0 0 170 170">
+      <circle cx="85" cy="85" r="70" fill="none" stroke="rgba(111,211,255,0.12)" stroke-width="2" />
+      <circle id="fuel" cx="85" cy="85" r="70" fill="none" stroke="#6fd3ff" stroke-width="2.5"
+        stroke-linecap="round" transform="rotate(-90 85 85)" style="filter: drop-shadow(0 0 6px rgba(111,211,255,0.7))" />
+      <circle cx="85" cy="85" r="58" fill="none" stroke="rgba(111,211,255,0.15)" stroke-width="1" stroke-dasharray="1 5" />
+      <text id="allow" x="85" y="82" text-anchor="middle">–</text>
+      <text id="allowsub" x="85" y="102" text-anchor="middle">WEEKLY ALLOWANCE</text>
+    </svg>
+  </div>
+
+  <div id="jobs" class="t-stagger-line d5"></div>
+
+  <div id="cmdwrap" class="t-stagger-line d5">
+    <div id="reply"></div>
+    <div id="cmdline"><span class="chev">&#10095;</span><input id="cmd" placeholder="Speak or type, Sir." autocomplete="off" /></div>
+    <div id="hint">ESC TO DISMISS</div>
+  </div>
+  <audio id="player"></audio>
+<script>
+  const $ = (id) => document.getElementById(id);
+
+  // ---- clock ----
+  function tickClock() {
+    const d = new Date();
+    $('clock').textContent = d.toLocaleDateString('en-IE', { weekday: 'long', day: 'numeric', month: 'long' }).toUpperCase()
+      + '  ·  ' + d.toLocaleTimeString('en-IE', { hour: '2-digit', minute: '2-digit' });
+  }
+  tickClock(); setInterval(tickClock, 20000);
+
+  function greeting() {
+    const h = new Date().getHours();
+    return h < 12 ? 'Good morning, Sir.' : h < 18 ? 'Good afternoon, Sir.' : 'Good evening, Sir.';
+  }
+
+  // ---- data ----
+  function stripFm(md) { return (md || '').replace(/^---[\s\S]*?---\s*/, ''); }
+
+  async function load() {
+    $('greet').textContent = greeting();
+
+    // Top-3 from today's briefing
+    const briefing = stripFm(await window.jarvis.read('briefing'));
+    const focus = $('focus'); focus.innerHTML = '';
+    const m = briefing && briefing.match(/TODAY'S FOCUS([\s\S]*?)(?:\n\s*\n|$)/);
+    const items = m ? m[1].split('\n').filter((l) => /^\s*\d\./.test(l)).slice(0, 3) : [];
+    items.forEach((l, i) => {
+      const div = document.createElement('div');
+      div.className = 'focus t-stagger-line d' + (i + 2);
+      div.textContent = l.replace(/^\s*\d\.\s*/, '').trim();
+      focus.append(div);
+    });
+    if (!items.length) {
+      const div = document.createElement('div');
+      div.className = 'focus t-stagger-line d2';
+      div.textContent = 'No briefing yet today. Ask me for one.';
+      focus.append(div);
+    }
+
+    // day arc (06:00-24:00 vertical) with events
+    try {
+      const cal = await window.jarvis.calendar();
+      const svg = $('dayarc');
+      let s = '<line x1="30" y1="10" x2="30" y2="450" stroke="rgba(111,211,255,0.25)" stroke-width="1"/>';
+      for (let h = 6; h <= 24; h += 3) {
+        const y = 10 + ((h - 6) / 18) * 440;
+        s += `<line x1="24" y1="${y}" x2="36" y2="${y}" stroke="rgba(111,211,255,0.4)" stroke-width="1"/>` +
+             `<text x="6" y="${y + 3}">${String(h).padStart(2, '0')}</text>`;
+      }
+      const now = new Date(); const nh = now.getHours() + now.getMinutes() / 60;
+      if (nh >= 6) {
+        const y = 10 + ((Math.min(nh, 24) - 6) / 18) * 440;
+        s += `<circle cx="30" cy="${y}" r="3" fill="#6fd3ff" style="filter:drop-shadow(0 0 5px #6fd3ff)"/>`;
+      }
+      for (const e of (cal && cal.Events) || []) {
+        if (e.AllDay) continue;
+        const [hh, mm] = e.Start.split(':').map(Number);
+        const y = 10 + ((hh + mm / 60 - 6) / 18) * 440;
+        s += `<line x1="30" y1="${y}" x2="52" y2="${y}" stroke="#6fd3ff" stroke-width="1" opacity="0.7"/>` +
+             `<text class="evlabel" x="58" y="${y + 3}">${e.Start}  ${e.Summary.slice(0, 14).toUpperCase()}</text>`;
+      }
+      const allday = ((cal && cal.Events) || []).filter((e) => e.AllDay);
+      allday.forEach((e, i) => { s += `<text class="evlabel" x="6" y="${430 + i * 14}" opacity="0.7">✦ ${e.Summary.slice(0, 16).toUpperCase()}</text>`; });
+      svg.innerHTML = s;
+    } catch {}
+
+    // allowance fuel ring: remaining fraction of the money-week (resets Sunday)
+    const fin = stripFm(await window.jarvis.read('finance'));
+    const am = fin && fin.match(/Weekly allowance[^|]*\|\s*\*{0,2}(EUR\s*\d+)/i);
+    $('allow').textContent = am ? am[1].replace('EUR', '€') : '–';
+    const day = (new Date().getDay() + 7) % 7;                 // 0=Sun ... 6=Sat
+    const remaining = 1 - (day + new Date().getHours() / 24) / 7;
+    const C = 2 * Math.PI * 70;
+    $('fuel').setAttribute('stroke-dasharray', `${C * Math.max(0.02, remaining)} ${C}`);
+
+    // jobs constellation
+    const jobs = stripFm(await window.jarvis.read('jobs'));
+    const wrap = $('jobs'); wrap.innerHTML = '';
+    const rows = (jobs.match(/^\|[^|\n]+\|[^\n]+$/gm) || []).filter((r) => !/^(\|\s*Company|\|[-\s|]+$)/i.test(r));
+    for (const r of rows.slice(0, 6)) {
+      const c = r.split('|').map((x) => x.trim());
+      const co = (c[1] || '').replace(/~~/g, ''); const status = c[5] || '';
+      if (!co) continue;
+      const d = document.createElement('div');
+      d.className = 'jdot' + (/closed|reject|skip/i.test(status) ? ' closed' : /⏰|due/i.test(status + (c[6] || '')) ? ' due' : '');
+      d.innerHTML = '<i></i>' + co.split(' ')[0].slice(0, 10);
+      d.title = co + ' - ' + status.replace(/[*✅]/g, '');
+      wrap.append(d);
+    }
+  }
+
+  // ---- command line ----
+  const cmd = $('cmd'); const reply = $('reply');
+  $('cmd').addEventListener('keydown', async (e) => {
+    if (e.key !== 'Enter') return;
+    const msg = cmd.value.trim(); if (!msg) return;
+    cmd.value = '';
+    reply.classList.add('shimmer'); reply.textContent = 'Jarvis is on it…';
+    const res = await window.jarvis.chat(msg);
+    reply.classList.remove('shimmer');
+    reply.textContent = res.text;
+    if (res.ok) {
+      const f = await window.jarvis.speak(res.text.slice(0, 400));
+      if (f) { const p = $('player'); p.src = 'file:///' + String(f).replace(/\\/g, '/'); p.play().catch(() => {}); }
+      load();
+    }
+  });
+
+  // ---- lifecycle ----
+  window.addEventListener('keydown', (e) => { if (e.key === 'Escape') window.jarvis.summonHide(); });
+  window.jarvis.onSummonShow(() => {
+    document.body.classList.remove('on');
+    void document.body.offsetHeight;      // reflow so the stagger replays
+    document.body.classList.add('on');
+    load();
+    setTimeout(() => cmd.focus(), 350);
+  });
+</script>
+</body>
+</html>

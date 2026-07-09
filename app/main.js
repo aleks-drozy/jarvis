@@ -1,7 +1,7 @@
 // Jarvis Companion - main process
 // Tray butler: dashboard window, HUD one-liners, voice, chat. The app shell READS and DISPLAYS;
 // all writes happen through the real Jarvis skill (chat) or existing scripts. Single-writer rule.
-const { app, Tray, Menu, BrowserWindow, ipcMain, nativeImage, screen, shell } = require('electron');
+const { app, Tray, Menu, BrowserWindow, ipcMain, nativeImage, screen, shell, globalShortcut } = require('electron');
 const path = require('path');
 const fs = require('fs');
 
@@ -18,6 +18,8 @@ let tray = null;
 let dashboard = null;
 let hud = null;
 let hudTimer = null;
+let orb = null;
+let summon = null;
 let state = loadState();
 
 function loadState() {
@@ -38,14 +40,15 @@ function createTray() {
   tray = new Tray(icon);
   tray.setToolTip('Jarvis');
   refreshTrayMenu();
-  tray.on('click', () => toggleDashboard());
+  tray.on('click', () => toggleSummon());
 }
 
 function refreshTrayMenu() {
   const menu = Menu.buildFromTemplate([
-    { label: 'Open Dashboard', click: () => toggleDashboard(true) },
+    { label: 'Summon Jarvis  (Ctrl+Shift+J)', click: () => toggleSummon() },
     { label: 'Read briefing aloud', click: () => readBriefingAloud() },
     { label: 'Debrief now', click: () => debriefNow() },
+    { label: 'Classic dashboard', click: () => toggleDashboard(true) },
     { type: 'separator' },
     { label: state.muted ? 'Unmute voice' : 'Mute voice', click: () => { state.muted = !state.muted; saveState(); refreshTrayMenu(); } },
     { label: 'Open vault folder', click: () => shell.openPath(VAULT.replace(/\//g, '\\')) },
@@ -53,6 +56,41 @@ function refreshTrayMenu() {
     { label: 'Quit Jarvis', click: () => app.quit() },
   ]);
   tray.setContextMenu(menu);
+}
+
+// ---------- orb (constant presence, owns audio playback) ----------
+function createOrb() {
+  const wa = screen.getPrimaryDisplay().workArea;
+  orb = new BrowserWindow({
+    width: 130, height: 130,
+    x: wa.x + wa.width - 150, y: wa.y + wa.height - 150,
+    frame: false, transparent: true, resizable: false, alwaysOnTop: true,
+    skipTaskbar: true, hasShadow: false, show: true,
+    webPreferences: { preload: path.join(__dirname, 'preload.js'), contextIsolation: true },
+  });
+  orb.loadFile(path.join(__dirname, 'renderer', 'orb.html'));
+  orb.setAlwaysOnTop(true, 'screen-saver');
+}
+function orbPlay(file) {
+  if (orb && !orb.isDestroyed()) orb.webContents.send('audio:play', file);
+}
+
+// ---------- summon (full-screen HUD overlay) ----------
+function toggleSummon() {
+  if (summon && !summon.isDestroyed() && summon.isVisible()) { summon.hide(); return; }
+  if (!summon || summon.isDestroyed()) {
+    const b = screen.getPrimaryDisplay().bounds;
+    summon = new BrowserWindow({
+      x: b.x, y: b.y, width: b.width, height: b.height,
+      frame: false, transparent: true, resizable: false, movable: false,
+      alwaysOnTop: true, skipTaskbar: true, hasShadow: false, show: false,
+      webPreferences: { preload: path.join(__dirname, 'preload.js'), contextIsolation: true },
+    });
+    summon.loadFile(path.join(__dirname, 'renderer', 'summon.html'));
+    summon.once('ready-to-show', () => { summon.show(); summon.focus(); summon.webContents.send('summon:show'); });
+  } else {
+    summon.show(); summon.focus(); summon.webContents.send('summon:show');
+  }
 }
 
 // ---------- dashboard ----------
@@ -98,7 +136,7 @@ function pushHud(text, opts) {
     setTimeout(() => { if (hud && !hud.isDestroyed()) hud.hide(); }, 260);
   }, opts.holdMs || 7000);
   if (!state.muted && opts.speak !== false) {
-    speak(text, state.voice).then(file => { if (file && hud && !hud.isDestroyed()) hud.webContents.send('hud:play', file); }).catch(() => {});
+    speak(text, state.voice).then(file => orbPlay(file)).catch(() => {});
   }
 }
 
@@ -114,7 +152,7 @@ async function readBriefingAloud() {
   if (text.length > 2600) text = text.slice(0, 2600) + ' ... and further detail is in the written briefing, Sir.';
   if (state.muted) { showHud('Voice is muted, Sir. The briefing is on screen.', { speak: false }); toggleDashboard(true); return; }
   const file = await speak(text, state.voice).catch(() => null);
-  if (file) { showHud('Reading your briefing, Sir.', { speak: false }); hud.webContents.send('hud:play', file); }
+  if (file) { showHud('Reading your briefing, Sir.', { speak: false }); orbPlay(file); }
 }
 
 function debriefNow() {
@@ -202,7 +240,9 @@ function registerIpc() {
   ipcMain.handle('voice:speak', async (_ev, text) => state.muted ? null : speak(text, state.voice));
   ipcMain.handle('app:state', () => state);
   ipcMain.handle('app:setVoice', (_ev, v) => { state.voice = v; saveState(); return state; });
-  ipcMain.on('hud:clicked', () => { if (hud && !hud.isDestroyed()) hud.hide(); toggleDashboard(true); });
+  ipcMain.on('hud:clicked', () => { if (hud && !hud.isDestroyed()) hud.hide(); toggleSummon(); });
+  ipcMain.on('summon:toggle', () => toggleSummon());
+  ipcMain.on('summon:hide', () => { if (summon && !summon.isDestroyed()) summon.hide(); });
 }
 
 // ---------- lifecycle ----------
@@ -212,10 +252,15 @@ else {
   app.setAppUserModelId('com.alexdrozdovs.jarvis');   // R-C: required for Windows notifications
   app.whenReady().then(() => {
     createTray();
+    createOrb();
     registerIpc();
     startWatchers();
-    if (process.argv.includes('--show')) toggleDashboard(true);
+    if (!globalShortcut.register('Control+Shift+J', toggleSummon)) {
+      console.error('summon hotkey registration failed');
+    }
+    if (process.argv.includes('--show')) toggleSummon();
     showHud('At your service, Sir.', { speak: true, holdMs: 5000 });
   });
+  app.on('will-quit', () => globalShortcut.unregisterAll());
   app.on('window-all-closed', (e) => e.preventDefault()); // tray app: never quit on window close
 }
