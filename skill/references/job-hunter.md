@@ -13,17 +13,25 @@ NEVER scrape LinkedIn/Indeed directly — ToS violation, account-ban risk (see 2
    (defaults: -Provider jooble -Country ie). If it throws "No key", give Alex the one-minute Jooble
    setup from the script header (register at jooble.org/api/about) and stop.
 3. Dedupe against the tracker (same company+role = skip; already-seen URLs = skip).
-4. Rank by fit vs the charter (SWE/AI first, then PM/adjacent; grad-friendly; Dublin/hybrid).
+4. Rank by fit vs the charter (SWE/AI first, then PM/adjacent; Dublin/hybrid) AND by seniority tier:
+   - **Grad-appropriate:** titles with Graduate / Intern / Associate / Junior / Trainee / "Early Careers" / "Engineer I".
+   - **Stretch:** "II" titles and unmarked mid-level roles (typically 1-3 yrs experience) — include only
+     if flagged as "stretch", never presented as grad positions.
+   - **Exclude:** Senior / Staff / Principal / Lead / Manager-of / Head-of / III+.
+   Present the two tiers separately and label them honestly.
 5. Present a shortlist, max 8: **Title — Company** | location | salary if given | posted date | link.
    One line each. End with: "Say the word and I'll prep the application for any of these, Sir."
 
 ## 2. Prep an application ("apply to #N / prep the CV for X")
 1. Add a row to the tracker: Company | Role | link | today | status **Drafting**.
-2. CV: hand off to the cv-adjuster app (`C:\Users\Alex\Projects\cv-adjuster`) — tell Alex the exact
-   command/task to tailor his CV for this role, or draft the tailoring notes yourself.
-3. Cover letter / outreach message: write to
-   `C:\Users\Alex\ObsidianVault\claude-memory\12-jarvis\outreach\<company>-<role>.md`
-   stamped "REVIEW - NOT SENT" (Safety 3). NEVER submit or email it yourself.
+2. CV: JARVIS tailors it directly (cv-adjuster app retired 2026-07-09). Master CVs live in
+   `C:\Users\Alex\Desktop\Job Search\` as print-ready HTML (open in browser, Ctrl+P, Save as PDF).
+   Create a per-role variant there (`aleksandrs-cv-<company>-<role>.html`) reusing the existing
+   design; emphasise per role; NEVER invent facts; NO em dashes anywhere (Alex's rule: they read as
+   AI tells to hiring managers).
+3. Cover letter: write to `C:\Users\Alex\ObsidianVault\claude-memory\12-jarvis\outreach\<company>-<role>.md`
+   stamped "REVIEW - NOT SENT" (Safety 3), naming which CV variant to attach. NO em dashes in letter
+   bodies. NEVER submit or email it yourself.
 4. Alex clicks submit himself. When he says he applied, set status **Applied** + date, and set
    "Follow-up due" = applied date + 10 days.
 
