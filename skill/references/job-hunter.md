@@ -13,6 +13,11 @@ NEVER scrape LinkedIn/Indeed directly — ToS violation, account-ban risk (see 2
    (defaults: -Provider jooble -Country ie). If it throws "No key", give Alex the one-minute Jooble
    setup from the script header (register at jooble.org/api/about) and stop.
 3. Dedupe against the tracker (same company+role = skip; already-seen URLs = skip).
+3b. STALENESS RULE (learned 2026-07-09: three prepped Mastercard roles turned out closed): aggregator
+   listings outlive the real vacancy. Prefer postings <= 7 days old; treat anything older as
+   "possibly closed". BEFORE prepping any application, Alex (or Jarvis via WebFetch/WebSearch) must
+   confirm the role is live on the company's own careers portal. Never draft against an unverified
+   listing older than 14 days.
 4. Rank by fit vs the charter (SWE/AI first, then PM/adjacent; Dublin/hybrid) AND by seniority tier:
    - **Grad-appropriate:** titles with Graduate / Intern / Associate / Junior / Trainee / "Early Careers" / "Engineer I".
    - **Stretch:** "II" titles and unmarked mid-level roles (typically 1-3 yrs experience) — include only
