@@ -35,15 +35,76 @@ async function loadToday() {
   } catch { $('calendar').innerHTML = '<li class="dim">Calendar unavailable.</li>'; }
 }
 
-async function loadSimple(name, elId) {
-  const md = await window.jarvis.read(name);
-  $(elId).textContent = md ? stripFrontmatter(md) : '(empty)';
+// generic markdown-table extractor: [{header:[...], rows:[[cells]]}]
+function mdTables(md) {
+  const tables = [];
+  const lines = (md || '').split('\n');
+  for (let i = 0; i < lines.length - 1; i++) {
+    if (/^\s*\|/.test(lines[i]) && /^\s*\|[\s\-|]+\|\s*$/.test(lines[i + 1])) {
+      const parse = (l) => l.split('|').slice(1, -1).map((c) => c.trim());
+      const header = parse(lines[i]);
+      const rows = [];
+      let j = i + 2;
+      while (j < lines.length && /^\s*\|/.test(lines[j])) { rows.push(parse(lines[j])); j++; }
+      tables.push({ header, rows });
+      i = j;
+    }
+  }
+  return tables;
+}
+
+async function loadMoney() {
+  const md = stripFrontmatter(await window.jarvis.read('finance'));
+  const el = $('money');
+  const tables = mdTables(md);
+  const kv = [];
+  for (const t of tables) {
+    for (const r of t.rows) {
+      const [item, amount] = r;
+      if (!item || !amount || amount.startsWith('(')) continue;
+      const isBig = /weekly allowance/i.test(item);
+      kv.push({ k: item.replace(/\*/g, ''), v: amount.replace(/\*/g, ''), big: isBig });
+    }
+  }
+  if (!kv.length) { el.textContent = 'No numbers yet. Tell Jarvis your balance in Chat.'; return; }
+  kv.sort((a, b) => (b.big ? 1 : 0) - (a.big ? 1 : 0));
+  el.innerHTML = '<ul class="kv">' + kv.map((x) =>
+    `<li><span>${x.k}</span><b class="${x.big ? 'big' : ''}">${x.v}</b></li>`).join('') + '</ul>';
+}
+
+async function loadJobs() {
+  const md = stripFrontmatter(await window.jarvis.read('jobs'));
+  const el = $('jobs');
+  const apps = mdTables(md).find((t) => /company/i.test(t.header[0] || ''));
+  const items = [];
+  if (apps) {
+    for (const r of apps.rows) {
+      const [co, role, , applied, status, followup] = r;
+      if (!co || co.replace(/[~\s]/g, '') === '') continue;
+      const st = (status || '').replace(/[*✅⏰~]/g, '').trim();
+      const cls = /applied/i.test(st) ? 'applied' : /draft/i.test(st) ? 'drafting' : /closed|reject|skip/i.test(st) ? 'closed' : '';
+      const meta = [applied && applied !== '—' ? 'applied ' + applied : '', followup && followup !== '—' ? 'follow-up ' + followup.replace(/[*⏰]/g, '').trim() : '']
+        .filter(Boolean).join(' · ');
+      items.push(`<li><span class="co">${co.replace(/~~/g, '')}</span> — ${role.replace(/~~/g, '')}` +
+        `<span class="st ${cls}">${st.split('(')[0].trim()}</span>` +
+        (meta ? `<div class="meta">${meta}</div>` : '') + '</li>');
+    }
+  }
+  el.innerHTML = items.length
+    ? '<ul class="joblist">' + items.join('') + '</ul>'
+    : 'No applications tracked yet, Sir.';
 }
 
 async function loadLive() {
   try {
     const s = await window.jarvis.liveStatus();
-    $('lastRun').textContent = s.lastRun || 'never';
+    if (s.lastRun) {
+      const d = new Date(s.lastRun);
+      const today = new Date().toDateString() === d.toDateString();
+      $('lastRun').textContent = isNaN(d) ? s.lastRun
+        : (today ? 'today ' : d.toLocaleDateString('en-IE', { day: 'numeric', month: 'short' }) + ' ')
+          + d.toLocaleTimeString('en-IE', { hour: '2-digit', minute: '2-digit' });
+    } else $('lastRun').textContent = 'never';
     const ok = $('lastRunOk');
     ok.textContent = s.lastRunOk === null ? '-' : (s.lastRunOk ? 'OK' : 'FAILED');
     ok.className = s.lastRunOk === null ? '' : (s.lastRunOk ? 'ok' : 'bad');
@@ -56,7 +117,7 @@ async function loadLive() {
   }
 }
 
-function refreshAll() { loadToday(); loadSimple('jobs', 'jobs'); loadSimple('finance', 'money'); loadLive(); }
+function refreshAll() { loadToday(); loadJobs(); loadMoney(); loadLive(); }
 window.jarvis.onRefresh(refreshAll);
 refreshAll();
 setInterval(loadLive, 60000);

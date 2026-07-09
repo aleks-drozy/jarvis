@@ -214,6 +214,7 @@ else {
     createTray();
     registerIpc();
     startWatchers();
+    if (process.argv.includes('--show')) toggleDashboard(true);
     showHud('At your service, Sir.', { speak: true, holdMs: 5000 });
   });
   app.on('window-all-closed', (e) => e.preventDefault()); // tray app: never quit on window close

@@ -1,7 +1,11 @@
 # Debrief procedure
 
 Produce a debrief that opens with the answer to "what should I do today", then crisp module sections.
-**Readability is a hard requirement** — ≤ ~3 lines per module; collapse no-change modules to one line.
+**BREVITY IS A HARD REQUIREMENT (Alex, 2026-07-09: "not a whole story"):**
+- Telegraph style. Facts, not narrative. No connective prose, no "suggesting that...", no recaps.
+- **Each module: max 2 sentences.** Cite hashes/sources in-line and stop.
+- **Each Top-3 item: one line, ≤ 14 words.**
+- Quiet module = exactly one line ("Projects: quiet."). The whole note should fit one screen.
 
 ## Steps
 1. Load `JARVIS.md` (goals) and `CONFIG.md` (toggles, owner_email, projects_dir, **ignores** — never
