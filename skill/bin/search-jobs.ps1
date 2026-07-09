@@ -27,12 +27,19 @@ function Get-StoredKey {
 }
 
 # ---------------- Jooble ----------------
+# NOTE (verified live): only the MAIN domain accepts API calls (regional subdomains return 403),
+# and a bare city like "Dublin" matches Dublin, California - so the country name is appended
+# to the location to scope results correctly.
+$JoobleCountryNames = @{ ie = 'Ireland'; gb = 'United Kingdom'; us = 'United States'; de = 'Germany'; fr = 'France'; nl = 'Netherlands'; es = 'Spain' }
+
 function Build-JoobleRequest {
   param([string]$What, [string]$Where, [string]$Country, [int]$ResultsPerPage, [string]$ApiKey)
-  $sub = if ($Country -and $Country -ne '') { "$Country." } else { '' }
+  $loc = $Where
+  $cname = $JoobleCountryNames[$Country]
+  if ($cname -and $loc -notmatch [regex]::Escape($cname)) { $loc = "$loc, $cname" }
   return @{
-    Uri  = "https://$($sub)jooble.org/api/$ApiKey"
-    Body = (@{ keywords = $What; location = $Where; page = '1'; searchMode = '1' } | ConvertTo-Json)
+    Uri  = "https://jooble.org/api/$ApiKey"
+    Body = (@{ keywords = $What; location = $loc; page = '1' } | ConvertTo-Json)
   }
 }
 

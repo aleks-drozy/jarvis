@@ -3,12 +3,16 @@ $ErrorActionPreference = 'Stop'
 . "$PSScriptRoot\..\skill\bin\search-jobs.ps1" -DotSourceOnly
 function Assert($c,$m){ if(-not $c){ Write-Error "FAIL: $m"; exit 1 } }
 
-# Jooble request: Ireland subdomain, key in path, keywords/location in JSON body
+# Jooble request: MAIN domain only (subdomains 403), country name appended to location
+# (verified live: bare "Dublin" matches Dublin, California)
 $r = Build-JoobleRequest -What 'graduate software engineer' -Where 'Dublin' -Country 'ie' -ResultsPerPage 10 -ApiKey 'KEYX'
-Assert ($r.Uri -eq 'https://ie.jooble.org/api/KEYX') "jooble URI must use ie subdomain + key path (got $($r.Uri))"
+Assert ($r.Uri -eq 'https://jooble.org/api/KEYX') "jooble URI must use main domain + key path (got $($r.Uri))"
 $b = $r.Body | ConvertFrom-Json
 Assert ($b.keywords -eq 'graduate software engineer') "jooble body keywords"
-Assert ($b.location -eq 'Dublin') "jooble body location"
+Assert ($b.location -eq 'Dublin, Ireland') "location must be country-scoped (got $($b.location))"
+# already-scoped location must not be doubled
+$r2 = Build-JoobleRequest -What 'x' -Where 'Cork, Ireland' -Country 'ie' -ResultsPerPage 5 -ApiKey 'K'
+Assert (($r2.Body | ConvertFrom-Json).location -eq 'Cork, Ireland') "no double country append"
 
 # Adzuna URL: correct country segment, escaped terms, all params present
 $u = Build-AdzunaQuery -What 'graduate software engineer' -Where 'London' -Country 'gb' `
