@@ -1,6 +1,7 @@
 # Job Hunter procedure
 
-Legal-first: jobs come from the Adzuna API (aggregator, free tier) via `bin/search-jobs.ps1`.
+Legal-first: jobs come from aggregator APIs via `bin/search-jobs.ps1` — **Jooble** for Ireland
+(default; key at `~/.jarvis/jooble.cred.xml`), Adzuna for UK/other countries (does NOT cover Ireland).
 NEVER scrape LinkedIn/Indeed directly — ToS violation, account-ban risk (see 2026 Proxycurl lawsuit).
 
 ## 1. Find roles ("find roles / find jobs / job search")
@@ -9,7 +10,8 @@ NEVER scrape LinkedIn/Indeed directly — ToS violation, account-ban risk (see 2
    "junior software developer", "AI engineer", "project manager graduate" (all Where=Dublin) and confirm.
 2. For each target (max 4 per session), run:
    `powershell -NoProfile -File C:\Users\Alex\.claude\skills\jarvis\bin\search-jobs.ps1 -What "<query>" -Where "Dublin"`
-   If it throws "No Adzuna keys", give Alex the one-time setup (script header has the exact block) and stop.
+   (defaults: -Provider jooble -Country ie). If it throws "No key", give Alex the one-minute Jooble
+   setup from the script header (register at jooble.org/api/about) and stop.
 3. Dedupe against the tracker (same company+role = skip; already-seen URLs = skip).
 4. Rank by fit vs the charter (SWE/AI first, then PM/adjacent; grad-friendly; Dublin/hybrid).
 5. Present a shortlist, max 8: **Title — Company** | location | salary if given | posted date | link.
