@@ -6,6 +6,10 @@ const fs = require('fs');
 const path = require('path');
 
 const CLAUDE_EXE = path.join(process.env.LOCALAPPDATA, 'Microsoft', 'WinGet', 'Links', 'claude.exe');
+const CHAT_LOG = path.join(__dirname, '..', 'chat-timing.log');
+function tlog(msg) {
+  try { fs.appendFileSync(CHAT_LOG, new Date().toISOString().slice(11, 19) + ' ' + msg + '\n'); } catch {}
+}
 const PERSONA =
   "You are Jarvis, Alex's butler (personality + HARD safety rules in ~/.claude/skills/jarvis/SKILL.md - " +
   'read it once and obey it for the whole conversation). Messages come from Alex via his desktop app. ' +
@@ -36,6 +40,7 @@ function ensureSession() {
     '--input-format', 'stream-json',
     '--output-format', 'stream-json',
     '--append-system-prompt', PERSONA,
+    '--model', 'sonnet',                                          // butler errands: fast model, not the flagship
     '--permission-mode', 'acceptEdits',
     '--allowedTools', 'Read Write Edit Bash Glob Grep',
     '--strict-mcp-config', '--mcp-config', '{"mcpServers":{}}',   // skip MCP servers: chat needs none
@@ -52,6 +57,8 @@ function ensureSession() {
       if (!line) continue;
       let ev;
       try { ev = JSON.parse(line); } catch { continue; }
+      tlog('event: ' + ev.type + (ev.subtype ? '/' + ev.subtype : '') +
+        (ev.type === 'assistant' && ev.message ? ' (' + JSON.stringify(ev.message.content || '').slice(0, 80) + ')' : ''));
       if (ev.type === 'result' && pending) {
         clearTimeout(pending.timer);
         const text = (ev.result || '').trim();
@@ -68,7 +75,9 @@ function ensureSession() {
 
 function sendViaSession(message) {
   return new Promise((resolve) => {
+    const wasAlive = !!(proc && !proc.killed);
     ensureSession();
+    tlog('send (session ' + (wasAlive ? 'REUSED' : 'SPAWNED') + '): ' + String(message).slice(0, 60));
     busy = true;
     pending = {
       resolve,
