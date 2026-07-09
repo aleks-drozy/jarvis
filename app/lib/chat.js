@@ -31,6 +31,15 @@ let proc = null;
 let buf = '';
 let pending = null;   // { resolve, timer } - one in-flight message at a time
 let busy = false;
+let idleTimer = null; // RAM courtesy: 7.4GB machine - warm session self-terminates after idle
+const IDLE_MS = 5 * 60 * 1000;
+
+function armIdleShutdown() {
+  clearTimeout(idleTimer);
+  idleTimer = setTimeout(() => {
+    if (proc && !busy) { tlog('idle shutdown (freeing RAM)'); try { proc.stdin.end(); proc.kill(); } catch {} proc = null; }
+  }, IDLE_MS);
+}
 
 function ensureSession() {
   if (proc && !proc.killed) return;
@@ -64,6 +73,7 @@ function ensureSession() {
         const text = (ev.result || '').trim();
         pending.resolve({ ok: !ev.is_error, text: text || '(done, Sir)' });
         pending = null; busy = false;
+        armIdleShutdown();
       }
     }
   });
