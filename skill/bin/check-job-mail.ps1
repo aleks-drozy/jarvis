@@ -5,7 +5,7 @@
 # Usage: powershell -File check-job-mail.ps1 [-SinceHours 24] [-SenderFilter 'linkedin|indeed|gradireland']
 param(
   [int]$SinceHours = 24,
-  [string]$SenderFilter = 'linkedin|indeed|gradireland|glassdoor|jobs\.ie|irishjobs|mastercard|workday|myworkday',
+  [string]$SenderFilter = 'linkedin|indeed|gradireland|glassdoor|jobs\.ie|irishjobs|mastercard|workday|myworkday|maynooth|nuim\.ie|vodafone',
   [int]$MaxMessages = 40,
   [switch]$DotSourceOnly
 )
@@ -88,8 +88,15 @@ function Get-JobMail {
     $mails = New-Object System.Collections.Generic.List[object]
     foreach ($id in $ids) {
       $fetch = Invoke-ImapCommand $writer $reader "a4$id" ("FETCH $id (BODY.PEEK[HEADER.FIELDS (FROM SUBJECT DATE)])")
-      $from = ''; $subj = ''; $date = ''
+      # unfold RFC 5322 folded headers: continuation lines start with space/tab
+      $unfolded = New-Object System.Collections.Generic.List[string]
       foreach ($l in $fetch) {
+        if ($l -match '^[ \t]+' -and $unfolded.Count -gt 0) {
+          $unfolded[$unfolded.Count - 1] = $unfolded[$unfolded.Count - 1] + ' ' + $l.Trim()
+        } else { $unfolded.Add($l) }
+      }
+      $from = ''; $subj = ''; $date = ''
+      foreach ($l in $unfolded) {
         if ($l -match '^(?i)From:\s*(.+)$')    { $from = $Matches[1].Trim() }
         elseif ($l -match '^(?i)Subject:\s*(.+)$') { $subj = $Matches[1].Trim() }
         elseif ($l -match '^(?i)Date:\s*(.+)$')    { $date = $Matches[1].Trim() }
