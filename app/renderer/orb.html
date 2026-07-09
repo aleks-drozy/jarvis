@@ -67,6 +67,7 @@
   });
 
   document.body.addEventListener('click', () => window.jarvis.summonToggle());
+  document.body.addEventListener('contextmenu', (e) => { e.preventDefault(); window.jarvis.orbHide(); });
 </script>
 </body>
 </html>

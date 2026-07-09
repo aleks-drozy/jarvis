@@ -51,6 +51,7 @@ function refreshTrayMenu() {
     { label: 'Classic dashboard', click: () => toggleDashboard(true) },
     { type: 'separator' },
     { label: state.muted ? 'Unmute voice' : 'Mute voice', click: () => { state.muted = !state.muted; saveState(); refreshTrayMenu(); } },
+    { label: (state.orbHidden ? 'Show orb' : 'Hide orb') + '  (Ctrl+Shift+O)', click: () => toggleOrb() },
     { label: 'Open vault folder', click: () => shell.openPath(VAULT.replace(/\//g, '\\')) },
     { type: 'separator' },
     { label: 'Quit Jarvis', click: () => app.quit() },
@@ -70,6 +71,14 @@ function createOrb() {
   });
   orb.loadFile(path.join(__dirname, 'renderer', 'orb.html'));
   orb.setAlwaysOnTop(true, 'screen-saver');
+  if (state.orbHidden) orb.hide();   // hidden orb still plays audio (window lives, invisible)
+}
+function toggleOrb() {
+  if (!orb || orb.isDestroyed()) return;
+  state.orbHidden = !state.orbHidden;
+  if (state.orbHidden) orb.hide(); else orb.showInactive();
+  saveState();
+  refreshTrayMenu();
 }
 function orbPlay(file) {
   if (orb && !orb.isDestroyed()) orb.webContents.send('audio:play', file);
@@ -242,6 +251,7 @@ function registerIpc() {
   ipcMain.handle('app:setVoice', (_ev, v) => { state.voice = v; saveState(); return state; });
   ipcMain.on('hud:clicked', () => { if (hud && !hud.isDestroyed()) hud.hide(); toggleSummon(); });
   ipcMain.on('summon:toggle', () => toggleSummon());
+  ipcMain.on('orb:hide', () => { if (!state.orbHidden) toggleOrb(); });
   ipcMain.on('summon:hide', () => { if (summon && !summon.isDestroyed()) summon.hide(); });
 }
 
@@ -258,6 +268,7 @@ else {
     if (!globalShortcut.register('Control+Shift+J', toggleSummon)) {
       console.error('summon hotkey registration failed');
     }
+    globalShortcut.register('Control+Shift+O', toggleOrb);
     if (process.argv.includes('--show')) toggleSummon();
     showHud('At your service, Sir.', { speak: true, holdMs: 5000 });
   });

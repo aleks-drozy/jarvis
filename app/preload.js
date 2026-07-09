@@ -13,6 +13,7 @@ contextBridge.exposeInMainWorld('jarvis', {
   setVoice: (v) => ipcRenderer.invoke('app:setVoice', v),
   hudClicked: () => ipcRenderer.send('hud:clicked'),
   summonToggle: () => ipcRenderer.send('summon:toggle'),
+  orbHide: () => ipcRenderer.send('orb:hide'),
   summonHide: () => ipcRenderer.send('summon:hide'),
   onSummonShow: (cb) => ipcRenderer.on('summon:show', () => cb()),
   onPlayAudio: (cb) => ipcRenderer.on('audio:play', (_e, file) => cb(file)),
