@@ -22,9 +22,9 @@ All vault paths below are absolute (the Bash/Read tools run from the Desktop cwd
 - **📅 Today (v1.1):** Calendar read; list today's events; flag conflicts and travel gaps. If off/unreachable → "⚠️ Calendar — connect to enable".
 - **📬 Inbox (v1.1):** Gmail read; sender + subject + neutral 1-line gist only; suppress sensitive (Safety 5). If off/unreachable → "⚠️ Inbox — connect to enable".
 - **🚧 Projects & agents:** run `powershell -NoProfile -File C:\Users\Alex\.claude\skills\jarvis\bin\collect-activity.ps1 -SinceHours 24` via Bash; report commits (with 8-char hash), repos with no commits in >7 days (stale), and what recent Claude sessions touched (from the JSON `Transcripts` + vault SESSION_NOTES). Cite hashes.
-- **💼 Job search:** read `C:\Users\Alex\ObsidianVault\claude-memory\12-jarvis\JOB_SEARCH.md`; next application(s), any follow-ups whose due date ≤ today, one LinkedIn move. If empty, say so and prompt Alex to add targets.
+- **💼 Job search:** read `C:\Users\Alex\ObsidianVault\claude-memory\12-jarvis\JOB_SEARCH.md`; follow-ups due (date ≤ today), stale Drafting rows, next application, one LinkedIn move. If Adzuna keys exist (`~/.jarvis/adzuna.cred.xml`), also run ONE fresh-roles check per `references/job-hunter.md` §4 (try/observe — degrade silently to tracker-only on any failure).
 - **🏋️ Life & discipline:** read `C:\Users\Alex\ObsidianVault\Life Roadmap 2026-2027\_INDEX.md` (phase) and the weekly-review due date; one line each on physical / mental / learning vs the charter goals; nudge if the weekly review is overdue (escalate tone if it's been overdue multiple debriefs).
-- **💰 Finance:** read `C:\Users\Alex\ObsidianVault\claude-memory\12-jarvis\FINANCE.md`; goal vs current manual numbers; one nudge. Never a transaction.
+- **💰 Finance:** read `C:\Users\Alex\ObsidianVault\claude-memory\12-jarvis\FINANCE.md` (Snapshot + Budget per `references/finance-coach.md`); report Thailand pace (ahead/behind), weekly allowance, one nudge. If the snapshot is empty or >30 days old, ask for fresh numbers. Never a transaction.
 - **💡 Suggestion:** from today's project/job activity + charter goals, one concrete idea (bias toward portfolio projects that get noticed by Dublin AI/SWE employers).
 
 ## Output template
