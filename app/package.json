@@ -1,0 +1,14 @@
+{
+  "name": "jarvis-companion",
+  "version": "0.1.0",
+  "description": "Jarvis desktop companion - tray butler with voice and HUD",
+  "main": "main.js",
+  "scripts": {
+    "start": "electron ."
+  },
+  "author": "Aleksandrs Drozdovs",
+  "license": "MIT",
+  "devDependencies": {
+    "electron": "^43.1.0"
+  }
+}

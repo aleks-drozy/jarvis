@@ -4,3 +4,6 @@
 .env
 .env.*
 tests/_tmp/
+app/node_modules/
+app/app-config.json
+app/package-lock.json

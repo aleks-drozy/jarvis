@@ -1,0 +1,124 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<style>
+  :root {
+    /* transitions.dev motion tokens (texts-reveal #18) */
+    --stagger-dur: 500ms;
+    --stagger-distance: 12px;
+    --stagger-stagger: 40ms;
+    --stagger-blur: 3px;
+    --stagger-ease: cubic-bezier(0.22, 1, 0.36, 1);
+    --accent: #6fd3ff;
+    --accent-alert: #ffb454;
+  }
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  html, body { background: transparent; overflow: hidden; height: 100%; }
+  body { font-family: "Segoe UI", system-ui, sans-serif; -webkit-user-select: none; cursor: pointer; }
+
+  .hud {
+    margin: 8px auto 0;
+    max-width: 540px;
+    padding: 14px 22px 15px;
+    border-radius: 14px;
+    background: rgba(10, 15, 22, 0.82);
+    border: 1px solid rgba(111, 211, 255, 0.22);
+    box-shadow: 0 8px 32px rgba(0, 0, 0, 0.45), inset 0 1px 0 rgba(255,255,255,0.06);
+    backdrop-filter: blur(14px);
+    text-align: center;
+  }
+  .hud[data-kind="alert"] { border-color: rgba(255, 180, 84, 0.4); }
+  .hud[data-kind="alert"] .eyebrow { color: var(--accent-alert); }
+  .hud[data-kind="alert"] .eyebrow::before,
+  .hud[data-kind="alert"] .eyebrow::after { background: var(--accent-alert); }
+
+  /* transitions.dev - texts reveal (18), CSS verbatim */
+  .t-stagger-line {
+    display: block;
+    opacity: 0;
+    transform: translateY(var(--stagger-distance));
+    filter: blur(var(--stagger-blur));
+    transition:
+      opacity   var(--stagger-dur) var(--stagger-ease),
+      transform var(--stagger-dur) var(--stagger-ease),
+      filter    var(--stagger-dur) var(--stagger-ease);
+    will-change: transform, opacity, filter;
+  }
+  .t-stagger-line--2 { transition-delay: var(--stagger-stagger); }
+  .t-stagger.is-shown .t-stagger-line {
+    opacity: 1;
+    transform: translateY(0);
+    filter: blur(0);
+  }
+  .t-stagger.is-hiding .t-stagger-line {
+    opacity: 0;
+    transform: translateY(0);
+    filter: blur(0);
+    transition:
+      opacity 200ms ease,
+      transform 0s linear,
+      filter 0s linear;
+    transition-delay: 0s;
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .t-stagger-line { transition: none !important; }
+  }
+
+  .eyebrow {
+    font-size: 10px;
+    letter-spacing: 0.55em;
+    text-indent: 0.55em;
+    color: var(--accent);
+    text-transform: uppercase;
+    display: flex; align-items: center; justify-content: center; gap: 10px;
+    margin-bottom: 5px;
+  }
+  .eyebrow::before, .eyebrow::after {
+    content: ""; height: 1px; width: 42px;
+    background: var(--accent); opacity: 0.45;
+  }
+  .line { font-size: 15.5px; font-weight: 500; color: #eaf4fb; line-height: 1.45; }
+</style>
+</head>
+<body>
+  <div class="hud" id="hud">
+    <div class="t-stagger" id="stagger">
+      <span class="t-stagger-line t-stagger-line--1 eyebrow">Jarvis</span>
+      <strong class="t-stagger-line t-stagger-line--2 line" id="text"></strong>
+    </div>
+  </div>
+  <audio id="player"></audio>
+<script>
+  const block = document.getElementById('stagger');
+  const hudEl = document.getElementById('hud');
+  const textEl = document.getElementById('text');
+  const player = document.getElementById('player');
+
+  // transitions.dev texts-reveal orchestration (reflow guarantees replay)
+  function showText() {
+    block.classList.remove('is-hiding');
+    block.classList.remove('is-shown');
+    void block.offsetHeight;
+    block.classList.add('is-shown');
+  }
+  function hideText() {
+    block.classList.add('is-hiding');
+    block.classList.remove('is-shown');
+    setTimeout(() => block.classList.remove('is-hiding'), 200);
+  }
+
+  window.jarvis.onHudShow(({ text, kind }) => {
+    textEl.textContent = text;
+    hudEl.dataset.kind = kind || 'info';
+    showText();
+  });
+  window.jarvis.onHudHide(() => hideText());
+  window.jarvis.onHudPlay((file) => {
+    player.src = 'file:///' + String(file).replace(/\\/g, '/');
+    player.play().catch(() => {});
+  });
+  document.body.addEventListener('click', () => window.jarvis.hudClicked());
+</script>
+</body>
+</html>

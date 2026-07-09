@@ -1,0 +1,90 @@
+:root {
+  --bg: #0b0f14;
+  --panel: rgba(18, 26, 36, 0.75);
+  --line: rgba(111, 211, 255, 0.14);
+  --accent: #6fd3ff;
+  --amber: #ffb454;
+  --text: #dfeaf3;
+  --dim: #7f93a5;
+  --mono: "Cascadia Code", Consolas, monospace;
+}
+* { margin: 0; padding: 0; box-sizing: border-box; }
+body {
+  background: radial-gradient(1200px 600px at 70% -10%, #12202e 0%, var(--bg) 55%);
+  color: var(--text);
+  font-family: "Segoe UI", system-ui, sans-serif;
+  font-size: 14px;
+  height: 100vh; display: flex; flex-direction: column; overflow: hidden;
+}
+.top {
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 14px 22px 10px; border-bottom: 1px solid var(--line);
+}
+.brand { letter-spacing: 0.35em; font-size: 13px; color: var(--accent); display: flex; align-items: center; gap: 10px; }
+.brand .sub { letter-spacing: 0.08em; text-transform: none; color: var(--dim); font-size: 11px; }
+.dot { width: 8px; height: 8px; border-radius: 50%; background: var(--accent); box-shadow: 0 0 12px var(--accent); }
+.tabs { display: flex; gap: 4px; }
+.tabs button {
+  background: transparent; border: 1px solid transparent; color: var(--dim);
+  padding: 7px 16px; border-radius: 9px; cursor: pointer; font-size: 13px;
+  transition: color 150ms ease, background 150ms ease;
+}
+.tabs button:hover { color: var(--text); }
+.tabs button.active { color: var(--accent); background: rgba(111,211,255,0.08); border-color: var(--line); }
+
+main { flex: 1; overflow: hidden; padding: 16px 22px 20px; }
+.tab { display: none; height: 100%; overflow: auto; }
+.tab.active { display: block; }
+.cols { display: flex; gap: 14px; height: 100%; }
+.grow { flex: 1; min-width: 0; }
+.side { width: 320px; flex-shrink: 0; }
+
+.card {
+  background: var(--panel); border: 1px solid var(--line); border-radius: 14px;
+  padding: 16px 18px; overflow: auto; max-height: 100%;
+}
+.card h2 {
+  font-size: 11px; letter-spacing: 0.28em; text-transform: uppercase;
+  color: var(--dim); margin-bottom: 12px; font-weight: 600;
+}
+.md { white-space: pre-wrap; font-family: var(--mono); font-size: 12.5px; line-height: 1.55; color: var(--text); }
+.md h3 { color: var(--accent); }
+.dim { color: var(--dim); }
+
+.cal { list-style: none; }
+.cal li { padding: 8px 0; border-bottom: 1px dashed var(--line); display: flex; gap: 10px; }
+.cal .t { font-family: var(--mono); color: var(--accent); min-width: 52px; }
+
+.stats { list-style: none; }
+.stats li { display: flex; justify-content: space-between; padding: 8px 0; border-bottom: 1px dashed var(--line); color: var(--dim); }
+.stats b { color: var(--text); font-family: var(--mono); font-weight: 500; }
+.stats b.ok { color: #7fe3a1; }
+.stats b.bad { color: var(--amber); }
+
+.chatwrap { display: flex; flex-direction: column; height: 100%; }
+.chatlog { flex: 1; overflow-y: auto; display: flex; flex-direction: column; gap: 10px; padding-bottom: 12px; }
+.msg { max-width: 78%; padding: 10px 14px; border-radius: 12px; line-height: 1.5; }
+.msg.you { align-self: flex-end; background: rgba(111,211,255,0.12); border: 1px solid var(--line); }
+.msg.jarvis { align-self: flex-start; background: rgba(255,255,255,0.04); border: 1px solid rgba(255,255,255,0.07); }
+.msg.thinking { color: var(--dim); font-style: italic; }
+/* transitions.dev shimmer-text (15) for the thinking state */
+.shimmer {
+  background: linear-gradient(100deg, var(--dim) 40%, #e8f4ff 50%, var(--dim) 60%);
+  background-size: 200% 100%;
+  -webkit-background-clip: text; background-clip: text; color: transparent;
+  animation: shimmer 1.6s linear infinite;
+}
+@keyframes shimmer { from { background-position: 200% 0; } to { background-position: -200% 0; } }
+@media (prefers-reduced-motion: reduce) { .shimmer { animation: none; color: var(--dim); } }
+
+.chatrow { display: flex; gap: 8px; padding-top: 10px; border-top: 1px solid var(--line); }
+.chatrow input {
+  flex: 1; background: rgba(255,255,255,0.05); border: 1px solid var(--line); border-radius: 10px;
+  color: var(--text); padding: 11px 14px; font-size: 13.5px; outline: none;
+}
+.chatrow input:focus { border-color: rgba(111,211,255,0.45); }
+.chatrow button {
+  background: rgba(111,211,255,0.14); color: var(--accent); border: 1px solid var(--line);
+  border-radius: 10px; padding: 0 20px; cursor: pointer; font-size: 13px;
+}
+.chatrow button:disabled { opacity: 0.4; cursor: default; }

@@ -1,0 +1,74 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<title>Jarvis</title>
+<link rel="stylesheet" href="dashboard.css" />
+</head>
+<body>
+  <header class="top">
+    <div class="brand"><span class="dot"></span> JARVIS <span class="sub">at your service</span></div>
+    <nav class="tabs" id="tabs">
+      <button data-tab="today" class="active">Today</button>
+      <button data-tab="jobs">Jobs</button>
+      <button data-tab="money">Money</button>
+      <button data-tab="live">Live</button>
+      <button data-tab="chat">Chat</button>
+    </nav>
+  </header>
+
+  <main>
+    <section id="tab-today" class="tab active">
+      <div class="cols">
+        <div class="card grow">
+          <h2>Briefing</h2>
+          <div id="briefing" class="md">Loading…</div>
+        </div>
+        <div class="card side">
+          <h2>Calendar</h2>
+          <ul id="calendar" class="cal"><li class="dim">Loading…</li></ul>
+        </div>
+      </div>
+    </section>
+
+    <section id="tab-jobs" class="tab">
+      <div class="card"><h2>Job Search</h2><div id="jobs" class="md">Loading…</div></div>
+    </section>
+
+    <section id="tab-money" class="tab">
+      <div class="card"><h2>Finance</h2><div id="money" class="md">Loading…</div></div>
+    </section>
+
+    <section id="tab-live" class="tab">
+      <div class="cols">
+        <div class="card side">
+          <h2>Status</h2>
+          <ul class="stats">
+            <li>Last scheduled run <b id="lastRun">–</b></li>
+            <li>Result <b id="lastRunOk">–</b></li>
+            <li>Claude sessions active (30m) <b id="activeSessions">–</b></li>
+          </ul>
+        </div>
+        <div class="card grow">
+          <h2>Open nudges (Ledger)</h2>
+          <div id="ledger" class="md">Loading…</div>
+        </div>
+      </div>
+    </section>
+
+    <section id="tab-chat" class="tab">
+      <div class="chatwrap card">
+        <div id="chatlog" class="chatlog">
+          <div class="msg jarvis">At your service, Sir. Ask or instruct — I can update your trackers from here.</div>
+        </div>
+        <form id="chatform" class="chatrow">
+          <input id="chatinput" type="text" placeholder='e.g. "I got 100 euro today, add it to the finances"' autocomplete="off" />
+          <button type="submit" id="sendbtn">Send</button>
+        </form>
+      </div>
+    </section>
+  </main>
+  <audio id="dashPlayer"></audio>
+<script src="dashboard.js"></script>
+</body>
+</html>
