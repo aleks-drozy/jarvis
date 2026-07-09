@@ -6,6 +6,9 @@
 param(
   [int]$SinceHours = 24,
   [string]$SenderFilter = 'linkedin|indeed|gradireland|glassdoor|jobs\.ie|irishjobs|mastercard|workday|myworkday|maynooth|nuim\.ie|vodafone',
+  # sensitive categories are counted but never itemised (Jarvis Safety rule 5)
+  [string]$SensitiveFilter = 'bank|revolut|paypal|stripe|payment|invoice|statement|transaction|medical|doctor|clinic|prescription|verification code|2fa|one.?time|passcode|password|security alert',
+  [ValidateSet('jobs','inbox','both')][string]$Mode = 'jobs',
   [int]$MaxMessages = 40,
   [switch]$DotSourceOnly
 )
@@ -54,7 +57,8 @@ function Decode-MimeHeader {
 }
 
 function Get-JobMail {
-  param([int]$SinceHours, [string]$SenderFilter, [int]$MaxMessages)
+  param([int]$SinceHours, [string]$SenderFilter, [int]$MaxMessages,
+        [string]$SensitiveFilter = '', [string]$Mode = 'jobs')
   $credFile = Join-Path $HOME '.jarvis\gmail.cred.xml'
   if (-not (Test-Path $credFile)) { throw "Missing $credFile - run the Gmail app-password setup." }
   $cred = Import-Clixml $credFile
@@ -77,6 +81,12 @@ function Get-JobMail {
     }
 
     $null = Invoke-ImapCommand $writer $reader 'a2' 'EXAMINE INBOX'   # read-only select
+
+    # unread count (whole inbox, not window-limited)
+    $unseen = Invoke-ImapCommand $writer $reader 'a2b' 'SEARCH UNSEEN'
+    $unseenLine = ($unseen | Where-Object { $_ -match '^\* SEARCH' } | Select-Object -First 1)
+    $unreadCount = 0
+    if ($unseenLine) { $unreadCount = @(($unseenLine -replace '^\* SEARCH\s*', '') -split '\s+' | Where-Object { $_ -match '^\d+$' }).Count }
 
     $since = (Get-Date).AddHours(-$SinceHours).ToString('dd-MMM-yyyy', [Globalization.CultureInfo]::InvariantCulture)
     $search = Invoke-ImapCommand $writer $reader 'a3' ("SEARCH SINCE $since")
@@ -106,14 +116,26 @@ function Get-JobMail {
     $null = Invoke-ImapCommand $writer $reader 'a9' 'LOGOUT'
 
     $alerts = @($mails | Where-Object { $_.From -match $SenderFilter -or $_.Subject -match $SenderFilter })
-    return [pscustomobject]@{
+    $result = [ordered]@{
       CheckedAt   = (Get-Date).ToString('s')
       SinceHours  = $SinceHours
       RecentCount = $mails.Count
-      JobAlerts   = $alerts
     }
+    if ($Mode -in @('jobs','both'))  { $result.JobAlerts = $alerts }
+    if ($Mode -in @('inbox','both')) {
+      $sensitive = @(); $notable = @()
+      if ($SensitiveFilter) {
+        $sensitive = @($mails | Where-Object { $_.From -match $SensitiveFilter -or $_.Subject -match $SensitiveFilter })
+      }
+      $notable = @($mails | Where-Object { $sensitive -notcontains $_ -and $alerts -notcontains $_ } | Select-Object -Last 8)
+      $result.UnreadCount    = $unreadCount
+      $result.Notable        = $notable          # sender+subject only, never bodies
+      $result.SensitiveCount = $sensitive.Count  # counted, never itemised (Safety 5)
+    }
+    return [pscustomobject]$result
   } finally { $tcp.Close() }
 }
 
 if ($DotSourceOnly) { return }
-Get-JobMail -SinceHours $SinceHours -SenderFilter $SenderFilter -MaxMessages $MaxMessages | ConvertTo-Json -Depth 4
+Get-JobMail -SinceHours $SinceHours -SenderFilter $SenderFilter -MaxMessages $MaxMessages `
+  -SensitiveFilter $SensitiveFilter -Mode $Mode | ConvertTo-Json -Depth 4
