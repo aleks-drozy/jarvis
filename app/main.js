@@ -22,7 +22,7 @@ let state = loadState();
 
 function loadState() {
   try { return JSON.parse(fs.readFileSync(APP_CONFIG, 'utf8')); }
-  catch { return { muted: false, voice: 'en-GB-RyanNeural' }; }
+  catch { return { muted: false, voice: 'en-US-AndrewMultilingualNeural' }; }
 }
 function saveState() { try { fs.writeFileSync(APP_CONFIG, JSON.stringify(state, null, 2)); } catch {} }
 
