@@ -185,6 +185,7 @@
     background: oklch(0.82 0.10 220 / 0.05); box-shadow: inset 0 0 12px oklch(0.82 0.10 220 / 0.07);
   }
   .rchip.alert { border-color: var(--amber-60); color: oklch(0.88 0.08 75); }
+  .rchip.quote { color: var(--ink-dim); font-style: italic; border-style: dashed; }
   /* thinking: three quiet pips, no gradient tricks */
   .rchip.wait { color: var(--ink-dim); }
   .rchip.wait i { display: inline-block; width: 4px; height: 4px; margin-left: 6px; border-radius: 50%;
@@ -283,6 +284,7 @@
       speak: async () => null, summonHide: () => {}, onSummonShow: (cb) => setTimeout(cb, 60),
       liveStatus: async () => ({ lastRun: '2026-07-10T08:31:02', lastRunOk: true, activeSessions: 2 }),
       summonTyping: () => {}, onMicUi: (cb) => { window.__micUi = cb; },   // preview: __micUi(true) to see the hot room
+      onVoiceChips: (cb) => { window.__voiceChips = cb; },                 // preview: __voiceChips({stage:'transcript',text:'...'})
     };
     // simulate a busy desktop behind the transparent window so the veil can be judged
     document.documentElement.style.background =
@@ -455,6 +457,11 @@
       c.append(...[0, 1, 2].map(() => document.createElement('i')));
       reply.append(c); return;
     }
+    if (kind === 'quote') {   // the heard transcript: one chip, verbatim, never split
+      const c = document.createElement('span');
+      c.className = 'rchip quote'; c.textContent = '“' + text + '”'; c.title = text;
+      reply.append(c); return;
+    }
     const parts = String(text)
       .split(/\s+[·•|]\s+|(?<=[.!?])\s+/)
       .map((s) => s.trim().replace(/[.·]+$/, ''))
@@ -495,6 +502,12 @@
   window.jarvis.onMicUi((on) => {
     document.body.classList.toggle('listening', on);
     $('hint').textContent = on ? HINT_HOT : HINT_IDLE;
+  });
+  // voice exchange plays out in the reply area: heard quote -> thinking pips -> reply chips
+  window.jarvis.onVoiceChips((d) => {
+    if (d.stage === 'thinking') showReply('', 'wait');
+    else if (d.stage === 'transcript') showReply(d.text, 'quote');
+    else if (d.stage === 'reply') { showReply(d.text, d.ok ? '' : 'alert'); if (d.ok) load(); }
   });
   cmd.addEventListener('keydown', (e) => {
     if (e.key !== 'Enter' && e.key !== 'Escape') window.jarvis.summonTyping();

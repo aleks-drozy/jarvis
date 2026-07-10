@@ -22,6 +22,7 @@ contextBridge.exposeInMainWorld('jarvis', {
   onMicStop: (cb) => ipcRenderer.on('mic:stop', () => cb()),
   onMicCancel: (cb) => ipcRenderer.on('mic:cancel', () => cb()),
   onMicUi: (cb) => ipcRenderer.on('mic:ui', (_e, on) => cb(on)),
+  onVoiceChips: (cb) => ipcRenderer.on('voice:chips', (_e, d) => cb(d)),
   onSummonShow: (cb) => ipcRenderer.on('summon:show', () => cb()),
   onPlayAudio: (cb) => ipcRenderer.on('audio:play', (_e, file) => cb(file)),
   onHudShow: (cb) => ipcRenderer.on('hud:show', (_e, data) => cb(data)),
