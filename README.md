@@ -1,9 +1,8 @@
 # Jarvis
 
-<!-- Demo media: capture per docs/SHOTLIST.md into docs/media/, then uncomment.
-<p align="center"><img src="docs/media/hero.gif" width="820" alt="Summoning Jarvis (Ctrl+Shift+J)"></p>
-<p align="center"><i>Ctrl+Shift+J — the Summon. Voice demo with sound: see below.</i></p>
--->
+<p align="center"><img src="docs/media/hero.gif" width="820" alt="Asking Jarvis about job applications, by voice"></p>
+<p align="center"><i>"How are my job applications looking?" - spoken aloud, transcribed locally, answered from the real
+tracker in ~5s of model time. Full clip with audio: <a href="docs/media/voice.mp4">docs/media/voice.mp4</a></i></p>
 
 A butler-style personal AI assistant, built as a **Claude Code agent skill** plus a set of
 PowerShell automations. Every morning at 08:30 it researches my life and emails me a briefing.
