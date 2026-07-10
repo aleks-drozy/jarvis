@@ -6,23 +6,32 @@
   * { margin: 0; padding: 0; box-sizing: border-box; }
   html, body { background: transparent; overflow: hidden; height: 100%; }
   body { display: grid; place-items: center; cursor: pointer; -webkit-user-select: none; }
-  #wrap { position: relative; width: 120px; height: 120px; }
-  svg { position: absolute; inset: 0; overflow: visible; }
+  #wrap { position: relative; width: 92px; height: 92px; }
+  svg { position: absolute; inset: 0; width: 100%; height: 100%; overflow: visible; }
   .ring  { fill: none; stroke: #6fd3ff; }
   #core  {
-    position: absolute; inset: 38px; border-radius: 50%;
+    position: absolute; inset: 29px; border-radius: 50%;
     background: radial-gradient(circle, rgba(111,211,255,0.85) 0%, rgba(111,211,255,0.25) 55%, transparent 75%);
     filter: blur(1px);
     transition: transform 60ms linear, opacity 200ms ease;
   }
   #r1 { opacity: 0.9; }
-  #r2 { opacity: 0.45; animation: spin 24s linear infinite; transform-origin: 60px 60px; }
-  #r3 { opacity: 0.25; animation: spin 60s linear infinite reverse; transform-origin: 60px 60px; }
+  #r2 { opacity: 0.45; animation: spin 24s linear infinite; transform-box: fill-box; transform-origin: center; }
+  #r3 { opacity: 0.25; animation: spin 60s linear infinite reverse; transform-box: fill-box; transform-origin: center; }
   @keyframes spin { to { transform: rotate(360deg); } }
   /* idle breath */
   #wrap { animation: breathe 5s ease-in-out infinite; }
   @keyframes breathe { 0%,100% { filter: drop-shadow(0 0 6px rgba(111,211,255,0.35)); } 50% { filter: drop-shadow(0 0 16px rgba(111,211,255,0.6)); } }
   @media (prefers-reduced-motion: reduce) { #r2, #r3, #wrap { animation: none; } }
+  /* listening: the arc reactor runs hot (amber) until you stop speaking */
+  body.listening .ring { stroke: #ffb454; }
+  body.listening #core {
+    background: radial-gradient(circle, rgba(255,180,84,0.9) 0%, rgba(255,180,84,0.3) 55%, transparent 75%);
+  }
+  body.listening #wrap { animation: none; filter: drop-shadow(0 0 18px rgba(255,180,84,0.65)); }
+  /* thinking: back to cyan but spinning with intent while whisper + chat work */
+  body.thinking #r2 { animation-duration: 3s; }
+  body.thinking #r3 { animation-duration: 5s; }
 </style>
 </head>
 <body title="Jarvis - click to summon">
@@ -68,6 +77,79 @@
 
   document.body.addEventListener('click', () => window.jarvis.summonToggle());
   document.body.addEventListener('contextmenu', (e) => { e.preventDefault(); window.jarvis.orbHide(); });
+
+  // ---- voice input: record until silence, ship 16 kHz WAV to main for whisper ----
+  const SILENCE_RMS = 0.012;      // below this = silence (tune if it cuts you off / never stops)
+  const SILENCE_STOP_MS = 1800;   // this long after speech = done talking
+  const NO_SPEECH_MS = 6000;      // never spoke at all = cancel
+  const MAX_MS = 30000;           // hard cap per utterance
+  let mic = null;
+
+  async function micStart() {
+    if (mic) return;
+    let stream;
+    try {
+      stream = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: true, noiseSuppression: true } });
+    } catch { window.jarvis.micCancelled('denied'); return; }
+    const ctx = new AudioContext();
+    const src = ctx.createMediaStreamSource(stream);
+    const proc = ctx.createScriptProcessor(4096, 1, 1);
+    mic = { ctx, stream, proc, chunks: [], rate: ctx.sampleRate, spoke: false, silentMs: 0, t0: performance.now() };
+    src.connect(proc); proc.connect(ctx.destination);
+    document.body.classList.add('listening');
+    proc.onaudioprocess = (e) => {
+      if (!mic) return;
+      const data = e.inputBuffer.getChannelData(0);
+      mic.chunks.push(new Float32Array(data));
+      let sum = 0;
+      for (let i = 0; i < data.length; i++) sum += data[i] * data[i];
+      const rms = Math.sqrt(sum / data.length);
+      core.style.transform = `scale(${1 + Math.min(rms * 20, 0.9)})`;   // orb pulses with YOUR voice too
+      const frameMs = (data.length / mic.rate) * 1000;
+      if (rms > SILENCE_RMS) { mic.spoke = true; mic.silentMs = 0; } else mic.silentMs += frameMs;
+      const elapsed = performance.now() - mic.t0;
+      if ((mic.spoke && mic.silentMs > SILENCE_STOP_MS) || elapsed > MAX_MS) micStop();
+      else if (!mic.spoke && elapsed > NO_SPEECH_MS) micStop(true);
+    };
+  }
+
+  function micStop(cancel) {
+    if (!mic) return;
+    const m = mic; mic = null;
+    document.body.classList.remove('listening');
+    core.style.transform = '';
+    try { m.proc.disconnect(); m.stream.getTracks().forEach((t) => t.stop()); m.ctx.close(); } catch {}
+    if (cancel || !m.spoke) { window.jarvis.micCancelled(); return; }
+    document.body.classList.add('thinking');
+    window.jarvis.micAudio(encodeWav16k(m.chunks, m.rate)).finally(() => document.body.classList.remove('thinking'));
+  }
+
+  // mono float32 @ device rate -> 16-bit PCM 16 kHz WAV (exactly what whisper.cpp eats)
+  function encodeWav16k(chunks, inRate) {
+    let len = 0;
+    for (const c of chunks) len += c.length;
+    const all = new Float32Array(len);
+    let o = 0;
+    for (const c of chunks) { all.set(c, o); o += c.length; }
+    const ratio = inRate / 16000, outLen = Math.floor(all.length / ratio);
+    const pcm = new Int16Array(outLen);
+    for (let i = 0; i < outLen; i++) {
+      const s = Math.max(-1, Math.min(1, all[Math.floor(i * ratio)]));
+      pcm[i] = s < 0 ? s * 0x8000 : s * 0x7fff;
+    }
+    const buf = new ArrayBuffer(44 + pcm.length * 2);
+    const v = new DataView(buf);
+    const w = (off, str) => { for (let i = 0; i < str.length; i++) v.setUint8(off + i, str.charCodeAt(i)); };
+    w(0, 'RIFF'); v.setUint32(4, 36 + pcm.length * 2, true); w(8, 'WAVE');
+    w(12, 'fmt '); v.setUint32(16, 16, true); v.setUint16(20, 1, true); v.setUint16(22, 1, true);
+    v.setUint32(24, 16000, true); v.setUint32(28, 32000, true); v.setUint16(32, 2, true); v.setUint16(34, 16, true);
+    w(36, 'data'); v.setUint32(40, pcm.length * 2, true);
+    new Int16Array(buf, 44).set(pcm);
+    return buf;
+  }
+
+  window.jarvis.onMicStart(() => micStart());
+  window.jarvis.onMicStop(() => micStop());
 </script>
 </body>
 </html>

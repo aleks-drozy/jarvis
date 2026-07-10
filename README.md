@@ -48,11 +48,21 @@ Agents that act unattended need rules they cannot talk themselves out of:
 - **Privacy:** the inbox reader records sender + subject only, never message bodies; sensitive
   categories are suppressed.
 
+## Voice in, voice out
+
+Press `Ctrl+Shift+Space` anywhere: the desktop orb turns amber and listens, auto-stops after
+~2s of silence, transcribes **locally** with whisper.cpp (speech never leaves the machine),
+and routes the text through the same chat pipeline as typed commands. The reply comes back on
+the HUD and spoken aloud (edge-tts). Mic capture lives in the always-resident orb window:
+getUserMedia -> silence-gated PCM -> 16 kHz WAV -> whisper-cli. One-time setup:
+`scripts/setup-whisper.ps1` (fetches the CLI + base.en model into a gitignored vendor dir).
+
 ## Stack
 
 Claude Code (agent skill + headless `claude -p` with a long-lived token), Windows PowerShell 5.1,
-Windows Task Scheduler, Gmail SMTP/IMAP, Jooble + Adzuna REST APIs, Obsidian (markdown vault) as
-the memory layer. Plain-assertion test scripts in `tests/` (no framework dependency).
+Windows Task Scheduler, Gmail SMTP/IMAP, Jooble + Adzuna REST APIs, whisper.cpp (local STT),
+edge-tts (neural voice out), Obsidian (markdown vault) as the memory layer. Plain-assertion test
+scripts in `tests/` (no framework dependency).
 
 ## Battle scars (real bugs shipped and fixed)
 
@@ -63,6 +73,11 @@ the memory layer. Plain-assertion test scripts in `tests/` (no framework depende
 - Job aggregators keep ghost listings: three fully-prepped applications turned out to be closed
   roles. The procedure now enforces a freshness rule and verify-at-source before drafting.
 - A bare "Dublin" location matched Dublin, California. Locations are country-scoped now.
+- The 08:30 briefing silently skipped one morning: laptop asleep at 08:30, and Task Scheduler's
+  default `DisallowStartIfOnBatteries` blocked the catch-up run at wake because the machine was
+  unplugged. Both battery conditions are now stripped by `scripts/register-task.ps1`.
+- whisper.cpp's release zip still ships `main.exe` - as a deprecation stub that exits 1. The
+  code looks only for `whisper-cli.exe`.
 
 ## Layout
 
