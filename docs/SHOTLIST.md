@@ -11,6 +11,11 @@ drop them in `docs/media/`, and the README Demo section (already stubbed) gets w
   into a GitHub issue/PR comment to get a hosted URL that embeds in the README.
 - Before recording: fresh briefing on file, charge above 30% (the PWR readout is in shot).
 
+**Status 2026-07-10:** shots 1+2 DONE, sourced from Recording-Attempt-5 (voice exchange take):
+`hero.gif` (4.2 MB, first 24s, denoised for GIF size) and `voice.mp4` (5.3 MB, 42s, dead air
+jump-cut at 0:12). Stills 3-5 still open. A "summon materializing" take could later replace the
+hero (see shot 1 description).
+
 ## The five shots
 
 | # | File | What to capture | Length |
