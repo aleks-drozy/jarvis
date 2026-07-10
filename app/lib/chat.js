@@ -58,6 +58,7 @@ function ensureSession() {
   buf = '';
   proc = spawn(CLAUDE_EXE, [
     '-p',
+    '--verbose',        // REQUIRED with -p + stream-json output; without it the CLI exits 1 in ~3s
     '--input-format', 'stream-json',
     '--output-format', 'stream-json',
     '--append-system-prompt', PERSONA,
@@ -89,7 +90,15 @@ function ensureSession() {
       }
     }
   });
-  proc.on('exit', () => {
+  // stderr goes to the log, never to the void - this exact blindness hid the --verbose bug for 2 days
+  proc.stderr.on('data', (d) => tlog('session stderr: ' + d.toString().trim().slice(0, 200)));
+  proc.on('error', (e) => {
+    tlog('session spawn error: ' + e.message);
+    if (pending) { clearTimeout(pending.timer); pending.resolve({ ok: false, text: 'My session dropped, Sir. Say that again?' }); pending = null; }
+    proc = null; busy = false;
+  });
+  proc.on('exit', (code) => {
+    tlog('session exit code=' + code);
     if (pending) { clearTimeout(pending.timer); pending.resolve({ ok: false, text: 'My session dropped, Sir. Say that again?' }); pending = null; }
     proc = null; busy = false;
   });
@@ -119,7 +128,7 @@ function sendViaSession(message) {
 function sendOneShot(message) {
   return new Promise((resolve) => {
     const prompt = PERSONA + '\nAlex says: <<<' + String(message) + '>>>';
-    execFile(CLAUDE_EXE, ['-p', prompt,
+    const child = execFile(CLAUDE_EXE, ['-p', prompt,
       '--permission-mode', 'acceptEdits',
       '--allowedTools', 'Read Write Edit Bash Glob Grep',
       '--strict-mcp-config', '--mcp-config', '{"mcpServers":{}}',
@@ -130,13 +139,24 @@ function sendOneShot(message) {
         if (err) return resolve({ ok: false, text: 'That errand failed, Sir: ' + (stderr || err.message).slice(0, 300) });
         resolve({ ok: true, text: String(stdout).trim() || '(done, Sir)' });
       });
+    child.stdin.end();   // open-but-silent stdin makes the CLI stall 3s and warn; close it outright
   });
+}
+
+async function waitNotBusy(ms) {
+  const t0 = Date.now();
+  while (busy && Date.now() - t0 < ms) await new Promise((r) => setTimeout(r, 200));
+  return !busy;
 }
 
 async function sendChat(message) {
   if (!fs.existsSync(CLAUDE_EXE)) return { ok: false, text: 'claude.exe not found, Sir.' };
   try { getToken(); } catch { return { ok: false, text: 'No Claude token found, Sir. Run claude setup-token.' }; }
-  if (busy) return { ok: false, text: 'One errand at a time, Sir - still working on the last one.' };
+  if (busy) {
+    // a warmup in flight is not a real errand: wait it out, then proceed
+    if (!warming || !(await waitNotBusy(45000)))
+      return { ok: false, text: 'One errand at a time, Sir - still working on the last one.' };
+  }
   try {
     const res = await sendViaSession(message);
     // streaming session hard-failed at transport level -> try one cold shot
@@ -145,10 +165,18 @@ async function sendChat(message) {
   } catch { return splitReply(await sendOneShot(message)); }
 }
 
-// spawn the warm session ahead of need (on summon / mic press) so the reply doesn't pay boot cost
+// Warm the session ahead of need (app start / summon / mic press). A REAL turn is sent, not a bare
+// spawn: an idle stream-json session self-terminates ("no stdin data received in 3s"), and the
+// warmup turn also pre-pays the SKILL.md read so the first real reply is fast.
+let warming = false;
 function prewarm() {
-  if (busy || (proc && !proc.killed)) return;
-  try { getToken(); ensureSession(); armIdleShutdown(); tlog('prewarmed'); } catch {}
+  if (busy || warming || (proc && !proc.killed)) return;
+  try { getToken(); } catch { return; }
+  warming = true;
+  tlog('prewarm: sending warmup turn');
+  sendViaSession('Warmup ping, no user present. Read your skill file now so later replies are fast, then reply with exactly: ready')
+    .then((r) => { warming = false; tlog('prewarm done ok=' + !!(r && r.ok)); })
+    .catch(() => { warming = false; });
 }
 
 module.exports = { sendChat, prewarm };
