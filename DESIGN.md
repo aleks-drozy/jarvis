@@ -1,7 +1,9 @@
 # DESIGN.md — Jarvis Desktop Companion
 
 ## Color
-- Base: near-black blue veil over the desktop, oklch(0.13 0.02 230) at ~92% alpha.
+- Base: near-black blue veil over the desktop, oklch(0.12 0.02 230) at 93% center to 98.5% edges.
+  NEAR-OPAQUE on purpose: a transparent Electron window cannot blur the desktop behind it
+  (backdrop-filter samples only the window's own content), so the veil's darkness carries alone.
 - Primary hologram cyan: oklch(0.82 0.10 220) (#6fd3ff family). Carries lines, rings, labels.
 - Dim cyan (hairlines/inactive): the same hue at 30-40% alpha. Never pure grey.
 - Alert amber: oklch(0.80 0.12 70) (#ffb454 family). Due items, warnings, listening state.

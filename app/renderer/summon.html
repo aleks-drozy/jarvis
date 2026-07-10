@@ -23,28 +23,48 @@
     color: var(--ink); -webkit-user-select: none;
   }
 
-  /* ---------- the veil: lights go down, one instrument comes up ---------- */
+  /* ---------- the veil: the room goes DARK (Electron can't blur the desktop
+     behind a transparent window, so darkness is carried by near-opacity) ---------- */
   #veil {
     position: absolute; inset: 0;
-    background: radial-gradient(1400px 900px at 50% 38%,
-      oklch(0.13 0.02 230 / 0.84) 0%, oklch(0.09 0.015 230 / 0.94) 70%);
+    background: radial-gradient(1500px 950px at 50% 38%,
+      oklch(0.12 0.02 230 / 0.93) 0%, oklch(0.07 0.015 230 / 0.985) 68%);
     opacity: 0; transition: opacity 380ms var(--ease);
   }
   body.on #veil { opacity: 1; }
   #veil::before {  /* scanlines, barely there */
     content: ""; position: absolute; inset: 0; pointer-events: none;
-    background: repeating-linear-gradient(0deg, transparent 0 2px, oklch(0.82 0.10 220 / 0.012) 2px 4px);
+    background: repeating-linear-gradient(0deg, transparent 0 2px, oklch(0.82 0.10 220 / 0.015) 2px 4px);
+  }
+  #veil::after {   /* film grain: static SVG noise, cinema not screensaver */
+    content: ""; position: absolute; inset: 0; pointer-events: none; opacity: 0.05;
+    background: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='160' height='160'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='2'/%3E%3C/filter%3E%3Crect width='160' height='160' filter='url(%23n)'/%3E%3C/svg%3E") repeat;
   }
   #sweep {
-    position: absolute; inset: -20%; pointer-events: none; opacity: 0.045;
+    position: absolute; inset: -20%; pointer-events: none; opacity: 0.05;
     background: conic-gradient(from 0deg, transparent 0deg, var(--cy) 8deg, transparent 26deg);
     animation: spin 16s linear infinite;
   }
-  /* central graticule: faint concentric instrument rings behind the greeting */
-  #grat { position: absolute; left: 50%; top: 38%; translate: -50% -50%; opacity: 0.10; pointer-events: none; }
-  #grat .g { fill: none; stroke: var(--cy); stroke-width: 1; }
-  #grat .rot { animation: spin 120s linear infinite; transform-box: fill-box; transform-origin: center; }
+  /* the arc reactor: a ring assembly behind the greeting, quietly alive */
+  #reactor {
+    position: absolute; left: 50%; top: 38%; translate: -50% -50%;
+    opacity: 0.15; pointer-events: none;
+    filter: drop-shadow(0 0 30px oklch(0.82 0.10 220 / 0.35));
+    animation: breathe 6s ease-in-out infinite;
+  }
+  #reactor circle { fill: none; stroke: var(--cy); }
+  #reactor .rot-a { animation: spin 80s linear infinite; transform-box: fill-box; transform-origin: center; }
+  #reactor .rot-b { animation: spin 50s linear infinite reverse; transform-box: fill-box; transform-origin: center; }
   @keyframes spin { to { transform: rotate(360deg); } }
+  @keyframes breathe { 0%, 100% { opacity: 0.12; } 50% { opacity: 0.18; } }
+
+  /* corner readouts: real data at the edges of the glass */
+  .cread { position: absolute; font-size: 9px; letter-spacing: 0.3em; color: var(--ink-faint); text-transform: uppercase; white-space: nowrap; }
+  .cread.warn { color: var(--amber); }
+  #readTL { top: 42px; left: 86px; }
+  #readTR { top: 42px; right: 86px; }
+  #readBL { bottom: 42px; left: 86px; }
+  #readBR { bottom: 42px; right: 86px; }
 
   /* ---------- corner brackets with tick details ---------- */
   .corner { position: absolute; width: 44px; height: 44px; border: 1px solid var(--cy-25); pointer-events: none; }
@@ -86,9 +106,11 @@
     text-align: center; max-width: 780px; width: 92%;
   }
   #greet {
-    font-size: 34px; font-weight: 300; letter-spacing: 0.15em; text-indent: 0.15em;
-    text-shadow: 0 0 26px oklch(0.82 0.10 220 / 0.35);
+    font-size: 42px; font-weight: 300; letter-spacing: 0.16em; text-indent: 0.16em;
+    text-shadow: 0 0 18px oklch(0.82 0.10 220 / 0.45), 0 0 60px oklch(0.82 0.10 220 / 0.25);
   }
+  body.on #greet { animation: settle 700ms var(--ease); }
+  @keyframes settle { from { transform: scale(0.975); } to { transform: scale(1); } }
   #centerRule {
     width: 300px; height: 1px; margin: 18px auto 22px; position: relative;
     background: linear-gradient(90deg, transparent, var(--cy-40), transparent);
@@ -105,6 +127,10 @@
   }
   .focus b { font-weight: 400; color: var(--ink); }
   .focus .ix { font-size: 10px; letter-spacing: 0.2em; color: var(--cy-70); }
+  /* the first directive carries the day */
+  .focus:first-child { font-size: 17px; }
+  .focus:first-child b { text-shadow: 0 0 14px oklch(0.82 0.10 220 / 0.3); }
+  .focus:not(:first-child) b { color: var(--ink-dim); }
 
   /* ---------- left: day arc ---------- */
   #dayarc { position: absolute; left: 44px; top: 50%; transform: translateY(-50%); }
@@ -160,20 +186,29 @@
   #cmd {
     flex: 1; background: transparent; border: 0; outline: 0; color: var(--ink);
     font: 300 16px "Bahnschrift Light", Bahnschrift, "Segoe UI", sans-serif; letter-spacing: 0.05em;
+    caret-color: var(--cy);
   }
   #cmd::placeholder { color: var(--ink-faint); }
+  ::selection { background: oklch(0.82 0.10 220 / 0.25); }
   #hint { text-align: center; margin-top: 12px; font-size: 10px; letter-spacing: 0.35em; text-indent: 0.35em; color: oklch(0.60 0.04 220 / 0.45); }
 </style>
 </head>
 <body>
   <div id="veil"><div id="sweep"></div></div>
-  <svg id="grat" width="620" height="620" viewBox="0 0 620 620">
-    <circle class="g" cx="310" cy="310" r="235" stroke-dasharray="1 6" />
-    <circle class="g rot" cx="310" cy="310" r="262" stroke-dasharray="40 320" />
-    <circle class="g" cx="310" cy="310" r="290" stroke-opacity="0.5" stroke-dasharray="1 10" />
+  <svg id="reactor" width="760" height="760" viewBox="0 0 760 760">
+    <circle cx="380" cy="380" r="188" stroke-width="1" stroke-opacity="0.55" />
+    <circle class="rot-a" cx="380" cy="380" r="212" stroke-width="9" stroke-opacity="0.28" stroke-dasharray="96 44" />
+    <circle cx="380" cy="380" r="248" stroke-width="1" stroke-dasharray="2 9" stroke-opacity="0.7" />
+    <circle class="rot-b" cx="380" cy="380" r="286" stroke-width="2.5" stroke-dasharray="170 480" stroke-linecap="round" />
+    <circle cx="380" cy="380" r="318" stroke-width="7" stroke-opacity="0.22" stroke-dasharray="1 13" />
+    <circle cx="380" cy="380" r="349" stroke-width="1" stroke-opacity="0.35" />
   </svg>
   <div class="corner tl"></div><div class="corner tr"></div>
   <div class="corner bl"></div><div class="corner br"></div>
+  <div id="readTL" class="cread rv d1"></div>
+  <div id="readTR" class="cread rv d1"></div>
+  <div id="readBL" class="cread rv d5"></div>
+  <div id="readBR" class="cread rv d5"></div>
 
   <div id="chrono" class="rv">
     <span class="rule"></span>
@@ -230,18 +265,46 @@
         { Summary: 'Clean the bathroom', Start: 'all day', AllDay: true }] }),
       chat: async (m) => ({ ok: true, text: 'noted · gym 12:00 · allowance EUR 42', say: 'Noted, Sir.' }),
       speak: async () => null, summonHide: () => {}, onSummonShow: (cb) => setTimeout(cb, 60),
+      liveStatus: async () => ({ lastRun: '2026-07-10T08:31:02', lastRunOk: true, activeSessions: 2 }),
     };
+    // simulate a busy desktop behind the transparent window so the veil can be judged
+    document.documentElement.style.background =
+      'linear-gradient(135deg, #e8e2d6 0%, #b8c8d8 30%, #3a6ea5 60%, #d0d8e0 100%)';
   }
 
   const $ = (id) => document.getElementById(id);
 
-  // ---- chronometer ----
+  // ---- chronometer (seconds tick: the instrument is alive) ----
   function tickClock() {
     const d = new Date();
     $('clock').textContent = d.toLocaleDateString('en-IE', { weekday: 'long', day: 'numeric', month: 'long' }).toUpperCase()
-      + '  ·  ' + d.toLocaleTimeString('en-IE', { hour: '2-digit', minute: '2-digit' });
+      + '  ·  ' + d.toLocaleTimeString('en-IE', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
   }
-  tickClock(); setInterval(tickClock, 20000);
+  tickClock(); setInterval(tickClock, 1000);
+
+  // ---- corner readouts: real data only, no theatre ----
+  async function corners() {
+    $('readTL').textContent = 'JARVIS V0.1 · ONLINE';
+    try {
+      const ls = await window.jarvis.liveStatus();
+      if (ls && ls.lastRun) {
+        $('readTR').textContent = 'LAST RUN ' + ls.lastRun.slice(11, 16) + (ls.lastRunOk ? ' · OK' : ' · FAILED');
+        $('readTR').classList.toggle('warn', ls.lastRunOk === false);
+      }
+      if (ls) {
+        const n = ls.activeSessions | 0;
+        $('readBL').textContent = n + ' AGENT' + (n === 1 ? '' : 'S') + ' ACTIVE';
+      }
+    } catch {}
+    try {
+      const b = await navigator.getBattery();
+      const upd = () => {
+        $('readBR').textContent = 'PWR ' + Math.round(b.level * 100) + '%' + (b.charging ? ' · CHARGING' : '');
+        $('readBR').classList.toggle('warn', !b.charging && b.level <= 0.2);
+      };
+      upd(); b.onlevelchange = upd; b.onchargingchange = upd;
+    } catch { $('readBR').textContent = ''; }
+  }
 
   function greeting() {
     const h = new Date().getHours();
@@ -253,6 +316,7 @@
 
   async function load() {
     $('greet').textContent = greeting();
+    corners();
 
     // Top-3 from today's briefing, indexed 01/02/03
     const briefing = stripFm(await window.jarvis.read('briefing'));
@@ -289,17 +353,23 @@
         s += `<circle cx="34" cy="${Y(nh)}" r="3" fill="var(--cy)" style="filter:drop-shadow(0 0 5px var(--cy))"/>` +
              `<text class="nowlabel" x="46" y="${Y(nh) - 6}">NOW</text>`;
       }
+      // strip "(Morning)"-style suffixes, then cut at a word boundary - no mid-word amputations
+      const evName = (t, max) => {
+        const clean = String(t).replace(/\s*\(.*?\)\s*$/, '').trim();
+        if (clean.length <= max) return clean.toUpperCase();
+        return clean.slice(0, max).replace(/\s+\S*$/, '').toUpperCase();
+      };
       for (const e of (cal && cal.Events) || []) {
         if (e.AllDay) continue;
         const [hh, mm] = e.Start.split(':').map(Number);
         const y = Y(hh + mm / 60);
         s += `<line x1="34" y1="${y}" x2="56" y2="${y}" stroke="var(--cy-70)" stroke-width="1"/>` +
              `<circle cx="56" cy="${y}" r="1.5" fill="var(--cy)"/>` +
-             `<text class="evlabel" x="63" y="${y + 3}">${e.Start}&#160;&#160;${e.Summary.slice(0, 13).toUpperCase()}</text>`;
+             `<text class="evlabel" x="63" y="${y + 3}">${e.Start}&#160;&#160;${evName(e.Summary, 13)}</text>`;
       }
       const allday = ((cal && cal.Events) || []).filter((e) => e.AllDay);
       allday.forEach((e, i) => {
-        s += `<text class="evlabel" x="4" y="${Y(24) + 20 + i * 15}" opacity="0.65">&#9670; ${e.Summary.slice(0, 22).toUpperCase()}</text>`;
+        s += `<text class="evlabel" x="4" y="${Y(24) + 20 + i * 15}" opacity="0.65">&#9670; ${evName(e.Summary, 22)}</text>`;
       });
       svg.innerHTML = s;
     } catch {}
@@ -318,19 +388,28 @@
       fuel.style.strokeDashoffset = C * (1 - remaining);    // ... sweep to the true reading
     }));
 
-    // pipeline constellation: linked stars, colored by status
+    // pipeline constellation: one star per COMPANY (xN when several roles), colored by status
     const jobs = stripFm(await window.jarvis.read('jobs'));
-    const svg = $('jobs'); let stars = [];
+    const svg = $('jobs');
     const rows = (jobs.match(/^\|[^|\n]+\|[^\n]+$/gm) || []).filter((r) => !/^(\|\s*Company|\|[-\s|]+$)/i.test(r));
-    rows.slice(0, 7).forEach((r, i, arr) => {
+    const rank = { 'st-due': 3, 'st-live': 2, 'st-closed': 1 };
+    const byCo = new Map();
+    for (const r of rows) {
       const c = r.split('|').map((x) => x.trim());
-      const co = (c[1] || '').replace(/~~/g, ''); if (!co) return;
+      const co = (c[1] || '').replace(/~~/g, ''); if (!co) continue;
       const status = (c[5] || '') + ' ' + (c[6] || '');
       const cls = /closed|reject|skip/i.test(status) ? 'st-closed' : /due|⏰/i.test(status) ? 'st-due' : 'st-live';
+      const key = co.split(' ')[0].slice(0, 10);
+      const prev = byCo.get(key);
+      if (prev) { prev.n++; if (rank[cls] > rank[prev.cls]) { prev.cls = cls; prev.full = co + ' · ' + status.replace(/[*✅]/g, '').trim(); } }
+      else byCo.set(key, { co: key, cls, n: 1, full: co + ' · ' + status.replace(/[*✅]/g, '').trim() });
+    }
+    let stars = [...byCo.values()].slice(0, 7).map((st, i, arr) => {
       const n = Math.min(arr.length, 7);
-      const x = 40 + (480 / Math.max(n - 1, 1)) * i;
-      const y = 18 + ((i * 37) % 3) * 7;                    // deterministic scatter, no randomness
-      stars.push({ x, y, co: co.split(' ')[0].slice(0, 10), cls, full: co + ' · ' + status.replace(/[*✅]/g, '').trim() });
+      return { ...st,
+        x: 40 + (480 / Math.max(n - 1, 1)) * i,
+        y: 18 + ((i * 37) % 3) * 7,                         // deterministic scatter, no randomness
+        co: st.co + (st.n > 1 ? ' ×' + st.n : '') };
     });
     let s = '';
     for (let i = 1; i < stars.length; i++)
