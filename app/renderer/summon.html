@@ -28,7 +28,7 @@
   #veil {
     position: absolute; inset: 0;
     background: radial-gradient(1500px 950px at 50% 38%,
-      oklch(0.12 0.02 230 / 0.93) 0%, oklch(0.07 0.015 230 / 0.985) 68%);
+      oklch(0.12 0.02 230 / 0.955) 0%, oklch(0.07 0.015 230 / 0.99) 68%);
     opacity: 0; transition: opacity 380ms var(--ease);
   }
   body.on #veil { opacity: 1; }
@@ -148,6 +148,7 @@
   /* ---------- pipeline constellation ---------- */
   #jobswrap { position: absolute; left: 50%; bottom: 224px; transform: translateX(-50%); text-align: center; }
   #jobswrap .micro { margin-bottom: 10px; }
+  #jobs { overflow: visible; }   /* labels center under edge stars - never clip them */
   #jobs text { fill: var(--ink-faint); font-size: 9px; letter-spacing: 0.22em; text-transform: uppercase; font-family: inherit; }
   #jobs .lk { stroke: var(--cy-12); stroke-width: 1; }
   #jobs .st-live   { fill: var(--cy); filter: drop-shadow(0 0 6px var(--cy-70)); }
@@ -407,7 +408,7 @@
     let stars = [...byCo.values()].slice(0, 7).map((st, i, arr) => {
       const n = Math.min(arr.length, 7);
       return { ...st,
-        x: 40 + (480 / Math.max(n - 1, 1)) * i,
+        x: 64 + (432 / Math.max(n - 1, 1)) * i,
         y: 18 + ((i * 37) % 3) * 7,                         // deterministic scatter, no randomness
         co: st.co + (st.n > 1 ? ' ×' + st.n : '') };
     });
