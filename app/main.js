@@ -87,7 +87,7 @@ function orbPlay(file) {
 
 // ---------- summon (full-screen HUD overlay) ----------
 function toggleSummon() {
-  if (summon && !summon.isDestroyed() && summon.isVisible()) { summon.hide(); return; }
+  if (summon && !summon.isDestroyed() && summon.isVisible()) { cancelListen(); summon.hide(); return; }
   prewarm();                       // claude session boots while Alex reads the HUD and types
   if (!summon || summon.isDestroyed()) {
     const b = screen.getPrimaryDisplay().bounds;
@@ -98,9 +98,9 @@ function toggleSummon() {
       webPreferences: { preload: path.join(__dirname, 'preload.js'), contextIsolation: true },
     });
     summon.loadFile(path.join(__dirname, 'renderer', 'summon.html'));
-    summon.once('ready-to-show', () => { summon.show(); summon.focus(); summon.webContents.send('summon:show'); });
+    summon.once('ready-to-show', () => { summon.show(); summon.focus(); summon.webContents.send('summon:show'); startListen(true); });
   } else {
-    summon.show(); summon.focus(); summon.webContents.send('summon:show');
+    summon.show(); summon.focus(); summon.webContents.send('summon:show'); startListen(true);
   }
 }
 
@@ -173,23 +173,38 @@ function debriefNow() {
     .catch(() => showHud('The debrief run failed, Sir. Check the log.', { kind: 'alert', speak: true }));
 }
 
-// ---------- voice input (Ctrl+Shift+Space: press to talk, auto-stops on silence) ----------
+// ---------- voice input (Ctrl+Shift+Space anywhere; summoning auto-arms the mic) ----------
 let listening = false;
-function toggleListen() {
-  if (!orb || orb.isDestroyed()) return;
-  if (!listening && !sttAvailable()) {
-    showHud('Voice input needs Whisper, Sir - run scripts/setup-whisper.ps1 once.', { kind: 'alert', speak: false });
+let autoListen = false;   // armed by the Summon opening: cancels silently, no "never mind" chatter
+
+function micUi(on) {      // the Summon runs hot (amber) while Jarvis listens
+  if (summon && !summon.isDestroyed()) summon.webContents.send('mic:ui', on);
+}
+function startListen(auto) {
+  if (!orb || orb.isDestroyed() || listening) return;
+  if (!sttAvailable()) {
+    if (!auto) showHud('Voice input needs Whisper, Sir - run scripts/setup-whisper.ps1 once.', { kind: 'alert', speak: false });
     return;
   }
-  listening = !listening;
-  if (listening) {
-    prewarm();                                  // session boots while Alex speaks
-    if (state.orbHidden) toggleOrb();           // listening deserves a visible ear
-    orb.webContents.send('mic:start');
-  } else {
-    orb.webContents.send('mic:stop');           // manual stop: transcribe whatever was said
-  }
+  listening = true; autoListen = !!auto;
+  prewarm();                                    // session boots while Alex speaks
+  if (!auto && state.orbHidden) toggleOrb();    // manual listen deserves a visible ear
+  orb.webContents.send('mic:start');
+  micUi(true);
 }
+function stopListen() {                         // manual stop: transcribe whatever was said
+  if (!listening) return;
+  listening = false;
+  orb.webContents.send('mic:stop');
+  micUi(false);
+}
+function cancelListen() {                       // discard: typing started or the Summon closed
+  if (!listening) return;
+  listening = false;
+  orb.webContents.send('mic:cancel');
+  micUi(false);
+}
+function toggleListen() { listening ? stopListen() : startListen(false); }
 
 async function handleSpeech(wavBuf) {
   listening = false;
@@ -285,16 +300,19 @@ function registerIpc() {
   ipcMain.handle('voice:speak', async (_ev, text) => state.muted ? null : speak(text, state.voice));
   ipcMain.handle('app:state', () => state);
   ipcMain.handle('app:setVoice', (_ev, v) => { state.voice = v; saveState(); return state; });
-  ipcMain.handle('mic:audio', (_ev, wavBuf) => handleSpeech(wavBuf));
+  ipcMain.handle('mic:audio', (_ev, wavBuf) => { micUi(false); return handleSpeech(wavBuf); });
   ipcMain.on('mic:cancelled', (_ev, reason) => {
-    listening = false;
+    const wasAuto = autoListen;
+    listening = false; autoListen = false;
+    micUi(false);
     if (reason === 'denied') showHud('Microphone blocked, Sir - allow it in Windows privacy settings.', { kind: 'alert', speak: false });
-    else showHud('Never mind, Sir.', { speak: false, holdMs: 2200 });
+    else if (!wasAuto) showHud('Never mind, Sir.', { speak: false, holdMs: 2200 });  // auto-arm cancels quietly
   });
+  ipcMain.on('summon:typing', () => { if (listening && autoListen) cancelListen(); });
   ipcMain.on('hud:clicked', () => { if (hud && !hud.isDestroyed()) hud.hide(); toggleSummon(); });
   ipcMain.on('summon:toggle', () => toggleSummon());
   ipcMain.on('orb:hide', () => { if (!state.orbHidden) toggleOrb(); });
-  ipcMain.on('summon:hide', () => { if (summon && !summon.isDestroyed()) summon.hide(); });
+  ipcMain.on('summon:hide', () => { cancelListen(); if (summon && !summon.isDestroyed()) summon.hide(); });
 }
 
 // ---------- lifecycle ----------

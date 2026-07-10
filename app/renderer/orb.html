@@ -150,6 +150,7 @@
 
   window.jarvis.onMicStart(() => micStart());
   window.jarvis.onMicStop(() => micStop());
+  window.jarvis.onMicCancel(() => micStop(true));   // discard, never transcribe (typing/summon closed)
 </script>
 </body>
 </html>
