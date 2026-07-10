@@ -45,6 +45,21 @@
     background: conic-gradient(from 0deg, transparent 0deg, var(--cy) 8deg, transparent 26deg);
     animation: spin 16s linear infinite;
   }
+  /* listening: the room runs hot - ember veil crossfades over the cyan one */
+  #veilWarm {
+    position: absolute; inset: 0; pointer-events: none; opacity: 0;
+    background: radial-gradient(1500px 950px at 50% 38%,
+      oklch(0.14 0.035 55 / 0.60) 0%, oklch(0.08 0.02 45 / 0.35) 68%);
+    transition: opacity 450ms var(--ease);
+  }
+  body.listening #veilWarm { opacity: 1; }
+  body.listening #reactor circle { stroke: var(--amber); }
+  body.listening #reactor { filter: drop-shadow(0 0 30px oklch(0.80 0.12 70 / 0.4)); }
+  body.listening #greet { text-shadow: 0 0 18px oklch(0.80 0.12 70 / 0.5), 0 0 60px oklch(0.80 0.12 70 / 0.28); }
+  body.listening #centerRule::after { background: var(--amber); box-shadow: 0 0 8px var(--amber-60); }
+  body.listening #cmdline { border-color: var(--amber-60); }
+  body.listening #cmdline .chev { color: var(--amber); }
+  body.listening #hint { color: var(--amber); }
   /* the arc reactor: a ring assembly behind the greeting, quietly alive */
   #reactor {
     position: absolute; left: 50%; top: 38%; translate: -50% -50%;
@@ -195,7 +210,7 @@
 </style>
 </head>
 <body>
-  <div id="veil"><div id="sweep"></div></div>
+  <div id="veil"><div id="sweep"></div><div id="veilWarm"></div></div>
   <svg id="reactor" width="760" height="760" viewBox="0 0 760 760">
     <circle cx="380" cy="380" r="188" stroke-width="1" stroke-opacity="0.55" />
     <circle class="rot-a" cx="380" cy="380" r="212" stroke-width="9" stroke-opacity="0.28" stroke-dasharray="96 44" />
@@ -267,6 +282,7 @@
       chat: async (m) => ({ ok: true, text: 'noted · gym 12:00 · allowance EUR 42', say: 'Noted, Sir.' }),
       speak: async () => null, summonHide: () => {}, onSummonShow: (cb) => setTimeout(cb, 60),
       liveStatus: async () => ({ lastRun: '2026-07-10T08:31:02', lastRunOk: true, activeSessions: 2 }),
+      summonTyping: () => {}, onMicUi: (cb) => { window.__micUi = cb; },   // preview: __micUi(true) to see the hot room
     };
     // simulate a busy desktop behind the transparent window so the veil can be judged
     document.documentElement.style.background =
@@ -471,6 +487,17 @@
       }).catch(() => {});
       load();
     }
+  });
+
+  // ---- listening theme: summoning arms the mic; typing stands it down ----
+  const HINT_IDLE = 'CTRL+SHIFT+SPACE TO SPEAK · ESC TO DISMISS';
+  const HINT_HOT = '◉ LISTENING — SPEAK, SIR · TYPING CANCELS';
+  window.jarvis.onMicUi((on) => {
+    document.body.classList.toggle('listening', on);
+    $('hint').textContent = on ? HINT_HOT : HINT_IDLE;
+  });
+  cmd.addEventListener('keydown', (e) => {
+    if (e.key !== 'Enter' && e.key !== 'Escape') window.jarvis.summonTyping();
   });
 
   // ---- lifecycle ----
