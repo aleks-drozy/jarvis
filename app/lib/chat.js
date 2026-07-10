@@ -10,16 +10,27 @@ const CHAT_LOG = path.join(__dirname, '..', 'chat-timing.log');
 function tlog(msg) {
   try { fs.appendFileSync(CHAT_LOG, new Date().toISOString().slice(11, 19) + ' ' + msg + '\n'); } catch {}
 }
-const PERSONA =
-  "You are Jarvis, Alex's butler (personality + HARD safety rules in ~/.claude/skills/jarvis/SKILL.md - " +
-  'read it once and obey it for the whole conversation). Messages come from Alex via his desktop app. ' +
-  'Be FAST: read only files each request needs; act (write your usual vault files per your rules). ' +
-  'REPLY FORMAT (hard rule - the app parses it): EXACTLY two lines. ' +
-  'Line 1: "SPOKEN: " then your natural butler reply, 1-2 short sentences, read aloud to Alex. ' +
-  'Line 2: "CHIPS: " then 2-6 telegraph key phrases separated by " · ", 15 words total max, shown on screen. ' +
-  'Plain text, no markdown. Example:\n' +
-  'SPOKEN: Gym at noon, Sir, and your allowance holds at forty-two euro.\n' +
-  'CHIPS: gym 12:00 · allowance EUR 42 · Vodafone follow-up Thu';
+const VAULT = 'C:/Users/Alex/ObsidianVault/claude-memory/12-jarvis';
+// persona is computed per spawn so today's briefing path is always current
+function persona() {
+  const d = new Date();
+  const iso = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+  return (
+    "You are Jarvis, Alex's butler (personality + HARD safety rules in ~/.claude/skills/jarvis/SKILL.md - " +
+    'read it once and obey it for the whole conversation). Messages come from Alex via his desktop app. ' +
+    'Be FAST: read only files each request needs; act (write your usual vault files per your rules). ' +
+    `GROUNDING (hard rule): never claim a module, calendar, or tracker is missing/unconnected without reading it. ` +
+    `Today is ${iso}. For today/schedule/plan questions read ${VAULT}/debriefs/${iso}.md FIRST; ` +
+    `live calendar if needed: run via Bash: powershell -NoProfile -File C:/Users/Alex/.claude/skills/jarvis/bin/get-calendar.ps1. ` +
+    `Trackers live in ${VAULT} (JOB_SEARCH.md, FINANCE.md, LEDGER.md). Cite what you read. ` +
+    'REPLY FORMAT (hard rule - the app parses it): EXACTLY two lines. ' +
+    'Line 1: "SPOKEN: " then your natural butler reply, 1-2 short sentences, read aloud to Alex. ' +
+    'Line 2: "CHIPS: " then 2-6 telegraph key phrases separated by " · ", 15 words total max, shown on screen. ' +
+    'Plain text, no markdown. Example:\n' +
+    'SPOKEN: Gym at noon, Sir, and your allowance holds at forty-two euro.\n' +
+    'CHIPS: gym 12:00 · allowance EUR 42 · Vodafone follow-up Thu'
+  );
+}
 
 // the model returns SPOKEN (voice) + CHIPS (screen); tolerate a misformatted reply gracefully
 function splitReply(res) {
@@ -61,7 +72,7 @@ function ensureSession() {
     '--verbose',        // REQUIRED with -p + stream-json output; without it the CLI exits 1 in ~3s
     '--input-format', 'stream-json',
     '--output-format', 'stream-json',
-    '--append-system-prompt', PERSONA,
+    '--append-system-prompt', persona(),
     '--model', 'sonnet',                                          // butler errands: fast model, not the flagship
     '--permission-mode', 'acceptEdits',
     '--allowedTools', 'Read Write Edit Bash Glob Grep',
@@ -127,7 +138,7 @@ function sendViaSession(message) {
 // ---------- one-shot fallback ----------
 function sendOneShot(message) {
   return new Promise((resolve) => {
-    const prompt = PERSONA + '\nAlex says: <<<' + String(message) + '>>>';
+    const prompt = persona() + '\nAlex says: <<<' + String(message) + '>>>';
     const child = execFile(CLAUDE_EXE, ['-p', prompt,
       '--permission-mode', 'acceptEdits',
       '--allowedTools', 'Read Write Edit Bash Glob Grep',
