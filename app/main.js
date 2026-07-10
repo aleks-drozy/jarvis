@@ -208,17 +208,27 @@ function toggleListen() { listening ? stopListen() : startListen(false); }
 
 async function handleSpeech(wavBuf) {
   listening = false;
+  // when the Summon is open, the voice exchange plays out in ITS reply area, not just the HUD strip
+  const toSummon = (d) => { if (summon && !summon.isDestroyed() && summon.isVisible()) summon.webContents.send('voice:chips', d); };
   const tmp = path.join(require('os').tmpdir(), `jarvis-mic-${Date.now()}.wav`);
   try {
     fs.writeFileSync(tmp, Buffer.from(wavBuf));
+    toSummon({ stage: 'thinking' });
     const text = await transcribe(tmp);
-    if (!text || text.length < 2) { showHud('I caught nothing intelligible, Sir.', { speak: false, holdMs: 3000 }); return; }
+    if (!text || text.length < 2) {
+      showHud('I caught nothing intelligible, Sir.', { speak: false, holdMs: 3000 });
+      toSummon({ stage: 'reply', text: 'I caught nothing intelligible, Sir', ok: false });
+      return;
+    }
     showHud('“' + text + '”', { speak: false, holdMs: 5000 });
+    toSummon({ stage: 'transcript', text });
     const res = await sendChat(text);
     // chips on screen, natural sentence aloud
     showHud(res.text, { kind: res.ok ? 'info' : 'alert', holdMs: 9000, say: res.say });
+    toSummon({ stage: 'reply', text: res.text, ok: res.ok });
   } catch (err) {
     showHud('Transcription failed, Sir: ' + String(err.message).slice(0, 120), { kind: 'alert', speak: false });
+    toSummon({ stage: 'reply', text: 'Transcription failed, Sir', ok: false });
   } finally { try { fs.unlinkSync(tmp); } catch {} }
 }
 
