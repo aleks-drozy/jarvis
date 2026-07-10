@@ -13,8 +13,20 @@ function tlog(msg) {
 const PERSONA =
   "You are Jarvis, Alex's butler (personality + HARD safety rules in ~/.claude/skills/jarvis/SKILL.md - " +
   'read it once and obey it for the whole conversation). Messages come from Alex via his desktop app. ' +
-  'Be FAST: read only files each request needs; act (write your usual vault files per your rules); ' +
-  'reply as Jarvis in 1-3 short sentences, plain text, no markdown.';
+  'Be FAST: read only files each request needs; act (write your usual vault files per your rules). ' +
+  'REPLY FORMAT (hard rule - the app parses it): EXACTLY two lines. ' +
+  'Line 1: "SPOKEN: " then your natural butler reply, 1-2 short sentences, read aloud to Alex. ' +
+  'Line 2: "CHIPS: " then 2-6 telegraph key phrases separated by " · ", 15 words total max, shown on screen. ' +
+  'Plain text, no markdown. Example:\n' +
+  'SPOKEN: Gym at noon, Sir, and your allowance holds at forty-two euro.\n' +
+  'CHIPS: gym 12:00 · allowance EUR 42 · Vodafone follow-up Thu';
+
+// the model returns SPOKEN (voice) + CHIPS (screen); tolerate a misformatted reply gracefully
+function splitReply(res) {
+  const m = String(res.text).match(/SPOKEN:\s*([\s\S]*?)\s*CHIPS:\s*([\s\S]*)/i);
+  if (!m) return res;
+  return { ...res, say: m[1].trim(), text: m[2].trim() || m[1].trim() };
+}
 
 let cachedToken = null;
 function getToken() {
@@ -128,9 +140,15 @@ async function sendChat(message) {
   try {
     const res = await sendViaSession(message);
     // streaming session hard-failed at transport level -> try one cold shot
-    if (!res.ok && /session dropped|write failed/i.test(res.text)) return await sendOneShot(message);
-    return res;
-  } catch { return await sendOneShot(message); }
+    if (!res.ok && /session dropped|write failed/i.test(res.text)) return splitReply(await sendOneShot(message));
+    return splitReply(res);
+  } catch { return splitReply(await sendOneShot(message)); }
 }
 
-module.exports = { sendChat };
+// spawn the warm session ahead of need (on summon / mic press) so the reply doesn't pay boot cost
+function prewarm() {
+  if (busy || (proc && !proc.killed)) return;
+  try { getToken(); ensureSession(); armIdleShutdown(); tlog('prewarmed'); } catch {}
+}
+
+module.exports = { sendChat, prewarm };

@@ -4,138 +4,238 @@
 <meta charset="UTF-8" />
 <style>
   :root {
-    --cy: #6fd3ff; --cy-dim: rgba(111,211,255,0.35); --amber: #ffb454;
-    --stagger-dur: 500ms; --stagger-distance: 12px; --stagger-stagger: 40ms;
-    --stagger-blur: 3px; --stagger-ease: cubic-bezier(0.22, 1, 0.36, 1);
+    --cy:      oklch(0.82 0.10 220);
+    --cy-70:   oklch(0.82 0.10 220 / 0.70);
+    --cy-40:   oklch(0.82 0.10 220 / 0.40);
+    --cy-25:   oklch(0.82 0.10 220 / 0.25);
+    --cy-12:   oklch(0.82 0.10 220 / 0.12);
+    --amber:   oklch(0.80 0.12 70);
+    --amber-60: oklch(0.80 0.12 70 / 0.60);
+    --ink:     oklch(0.93 0.02 220);
+    --ink-dim: oklch(0.72 0.04 220);
+    --ink-faint: oklch(0.60 0.04 220 / 0.75);
+    --ease: cubic-bezier(0.22, 1, 0.36, 1);
   }
   * { margin: 0; padding: 0; box-sizing: border-box; }
   html, body { height: 100%; overflow: hidden; background: transparent; }
   body {
     font-family: "Bahnschrift Light", Bahnschrift, "Segoe UI", sans-serif;
-    color: #dff3ff; -webkit-user-select: none;
+    color: var(--ink); -webkit-user-select: none;
   }
-  /* the veil: desktop dims, lights go down */
+
+  /* ---------- the veil: lights go down, one instrument comes up ---------- */
   #veil {
     position: absolute; inset: 0;
-    background: radial-gradient(1400px 900px at 50% 40%, rgba(6,12,18,0.82) 0%, rgba(2,5,8,0.93) 70%);
-    backdrop-filter: blur(7px);
-    opacity: 0; transition: opacity 420ms ease;
+    background: radial-gradient(1400px 900px at 50% 38%,
+      oklch(0.13 0.02 230 / 0.84) 0%, oklch(0.09 0.015 230 / 0.94) 70%);
+    opacity: 0; transition: opacity 380ms var(--ease);
   }
   body.on #veil { opacity: 1; }
-  /* scanlines + slow radar sweep */
-  #veil::before {
+  #veil::before {  /* scanlines, barely there */
     content: ""; position: absolute; inset: 0; pointer-events: none;
-    background: repeating-linear-gradient(0deg, transparent 0 2px, rgba(111,211,255,0.014) 2px 4px);
+    background: repeating-linear-gradient(0deg, transparent 0 2px, oklch(0.82 0.10 220 / 0.012) 2px 4px);
   }
   #sweep {
-    position: absolute; inset: -20%; pointer-events: none; opacity: 0.05;
-    background: conic-gradient(from 0deg, transparent 0deg, var(--cy) 8deg, transparent 30deg);
-    animation: sweep 14s linear infinite;
+    position: absolute; inset: -20%; pointer-events: none; opacity: 0.045;
+    background: conic-gradient(from 0deg, transparent 0deg, var(--cy) 8deg, transparent 26deg);
+    animation: spin 16s linear infinite;
   }
-  @keyframes sweep { to { transform: rotate(360deg); } }
+  /* central graticule: faint concentric instrument rings behind the greeting */
+  #grat { position: absolute; left: 50%; top: 38%; translate: -50% -50%; opacity: 0.10; pointer-events: none; }
+  #grat .g { fill: none; stroke: var(--cy); stroke-width: 1; }
+  #grat .rot { animation: spin 120s linear infinite; transform-box: fill-box; transform-origin: center; }
+  @keyframes spin { to { transform: rotate(360deg); } }
 
-  /* corner brackets */
-  .corner { position: absolute; width: 46px; height: 46px; border: 1px solid var(--cy-dim); pointer-events: none; }
-  .tl { top: 26px; left: 26px; border-right: 0; border-bottom: 0; }
-  .tr { top: 26px; right: 26px; border-left: 0; border-bottom: 0; }
-  .bl { bottom: 26px; left: 26px; border-right: 0; border-top: 0; }
-  .br { bottom: 26px; right: 26px; border-left: 0; border-top: 0; }
+  /* ---------- corner brackets with tick details ---------- */
+  .corner { position: absolute; width: 44px; height: 44px; border: 1px solid var(--cy-25); pointer-events: none; }
+  .corner::after { content: ""; position: absolute; width: 10px; height: 10px; border: 1px solid var(--cy-40); }
+  .tl { top: 24px; left: 24px; border-right: 0; border-bottom: 0; } .tl::after { top: -1px; left: -1px; border-right: 0; border-bottom: 0; }
+  .tr { top: 24px; right: 24px; border-left: 0; border-bottom: 0; } .tr::after { top: -1px; right: -1px; border-left: 0; border-bottom: 0; }
+  .bl { bottom: 24px; left: 24px; border-right: 0; border-top: 0; } .bl::after { bottom: -1px; left: -1px; border-right: 0; border-top: 0; }
+  .br { bottom: 24px; right: 24px; border-left: 0; border-top: 0; } .br::after { bottom: -1px; right: -1px; border-left: 0; border-top: 0; }
 
-  /* transitions.dev texts-reveal */
-  .t-stagger-line {
-    display: block; opacity: 0;
-    transform: translateY(var(--stagger-distance));
-    filter: blur(var(--stagger-blur));
-    transition: opacity var(--stagger-dur) var(--stagger-ease),
-      transform var(--stagger-dur) var(--stagger-ease), filter var(--stagger-dur) var(--stagger-ease);
+  /* ---------- staggered materialize ---------- */
+  .rv {
+    opacity: 0; transform: translateY(10px); filter: blur(3px);
+    transition: opacity 480ms var(--ease), transform 480ms var(--ease), filter 480ms var(--ease);
     will-change: transform, opacity, filter;
   }
-  body.on .t-stagger-line { opacity: 1; transform: translateY(0); filter: blur(0); }
-  .d1 { transition-delay: 60ms; } .d2 { transition-delay: 140ms; } .d3 { transition-delay: 220ms; }
-  .d4 { transition-delay: 300ms; } .d5 { transition-delay: 380ms; }
-  @media (prefers-reduced-motion: reduce) { .t-stagger-line { transition: none !important; } #sweep { animation: none; } }
+  body.on .rv { opacity: 1; transform: translateY(0); filter: blur(0); }
+  .d1 { transition-delay: 50ms; } .d2 { transition-delay: 110ms; } .d3 { transition-delay: 170ms; }
+  .d4 { transition-delay: 230ms; } .d5 { transition-delay: 290ms; } .d6 { transition-delay: 350ms; }
+  @media (prefers-reduced-motion: reduce) {
+    .rv { transition: none !important; }
+    #sweep, #grat .rot { animation: none; }
+  }
 
-  /* center column */
+  /* ---------- micro-label vocabulary ---------- */
+  .micro { font-size: 10px; letter-spacing: 0.32em; text-indent: 0.32em; color: var(--ink-faint); text-transform: uppercase; }
+
+  /* ---------- chronometer strip, top center ---------- */
+  #chrono {
+    position: absolute; top: 34px; left: 50%; transform: translateX(-50%);
+    display: flex; align-items: center; gap: 18px; white-space: nowrap;
+  }
+  #chrono .rule { width: 110px; height: 1px; background: linear-gradient(90deg, transparent, var(--cy-25)); }
+  #chrono .rule.rt { background: linear-gradient(270deg, transparent, var(--cy-25)); }
+  #chrono time { font-size: 13px; letter-spacing: 0.5em; text-indent: 0.5em; color: var(--ink-dim); }
+
+  /* ---------- center: greeting + focus ---------- */
   #center {
     position: absolute; left: 50%; top: 34%; transform: translate(-50%, -50%);
-    text-align: center; max-width: 760px; width: 90%;
+    text-align: center; max-width: 780px; width: 92%;
   }
-  #clock { font-size: 13px; letter-spacing: 0.6em; text-indent: 0.6em; color: var(--cy-dim); margin-bottom: 14px; }
-  #greet { font-size: 34px; font-weight: 300; letter-spacing: 0.14em; text-shadow: 0 0 22px rgba(111,211,255,0.35); margin-bottom: 26px; }
-  .focus { font-size: 15.5px; font-weight: 300; letter-spacing: 0.06em; color: #bfe2f5; padding: 7px 0; }
-  .focus::before { content: "\2726\00a0\00a0"; color: var(--cy); font-size: 11px; }
+  #greet {
+    font-size: 34px; font-weight: 300; letter-spacing: 0.15em; text-indent: 0.15em;
+    text-shadow: 0 0 26px oklch(0.82 0.10 220 / 0.35);
+  }
+  #centerRule {
+    width: 300px; height: 1px; margin: 18px auto 22px; position: relative;
+    background: linear-gradient(90deg, transparent, var(--cy-40), transparent);
+  }
+  #centerRule::after {
+    content: ""; position: absolute; left: 50%; top: -2.5px; width: 5px; height: 5px;
+    transform: translateX(-50%) rotate(45deg); background: var(--cy);
+    box-shadow: 0 0 8px var(--cy-70);
+  }
+  .focus {
+    display: flex; align-items: baseline; justify-content: center; gap: 14px;
+    font-size: 15.5px; font-weight: 300; letter-spacing: 0.05em; color: var(--ink-dim);
+    padding: 7px 0;
+  }
+  .focus b { font-weight: 400; color: var(--ink); }
+  .focus .ix { font-size: 10px; letter-spacing: 0.2em; color: var(--cy-70); }
 
-  /* left: day arc */
-  #dayarc { position: absolute; left: 40px; top: 50%; transform: translateY(-50%); }
-  #dayarc text { fill: #9fc7dc; font-size: 10px; letter-spacing: 0.15em; font-family: inherit; }
-  #dayarc .evlabel { fill: #dff3ff; font-size: 11px; }
+  /* ---------- left: day arc ---------- */
+  #dayarc { position: absolute; left: 44px; top: 50%; transform: translateY(-50%); }
+  #dayarc text { fill: var(--ink-faint); font-size: 10px; letter-spacing: 0.18em; font-family: inherit; }
+  #dayarc .evlabel { fill: var(--ink); font-size: 11px; letter-spacing: 0.08em; }
+  #dayarc .nowlabel { fill: var(--cy); font-size: 9px; letter-spacing: 0.25em; }
 
-  /* right: allowance ring */
-  #money { position: absolute; right: 56px; top: 50%; transform: translateY(-50%); text-align: center; }
+  /* ---------- right: allowance instrument ---------- */
+  #money { position: absolute; right: 52px; top: 50%; transform: translateY(-50%); text-align: center; }
   #money svg { overflow: visible; }
-  #allow { font-size: 26px; font-weight: 300; fill: #dff3ff; letter-spacing: 0.05em; }
-  #allowsub { font-size: 9px; fill: #9fc7dc; letter-spacing: 0.3em; }
+  #allow { font-size: 27px; font-weight: 300; fill: var(--ink); letter-spacing: 0.05em; }
+  #allowsub, #allowreset { font-size: 9px; fill: var(--ink-faint); letter-spacing: 0.3em; }
+  #fuel { transition: stroke-dashoffset 900ms var(--ease); }
 
-  /* bottom: jobs constellation + command line */
-  #jobs { position: absolute; left: 50%; bottom: 148px; transform: translateX(-50%); display: flex; gap: 18px; }
-  .jdot { display: flex; flex-direction: column; align-items: center; gap: 6px; font-size: 9px; letter-spacing: 0.2em; color: #9fc7dc; text-transform: uppercase; }
-  .jdot i { width: 9px; height: 9px; border-radius: 50%; background: var(--cy); box-shadow: 0 0 10px var(--cy); }
-  .jdot.closed i { background: #45606f; box-shadow: none; }
-  .jdot.due i { background: var(--amber); box-shadow: 0 0 10px var(--amber); }
+  /* ---------- pipeline constellation ---------- */
+  #jobswrap { position: absolute; left: 50%; bottom: 224px; transform: translateX(-50%); text-align: center; }
+  #jobswrap .micro { margin-bottom: 10px; }
+  #jobs text { fill: var(--ink-faint); font-size: 9px; letter-spacing: 0.22em; text-transform: uppercase; font-family: inherit; }
+  #jobs .lk { stroke: var(--cy-12); stroke-width: 1; }
+  #jobs .st-live   { fill: var(--cy); filter: drop-shadow(0 0 6px var(--cy-70)); }
+  #jobs .st-due    { fill: var(--amber); filter: drop-shadow(0 0 6px var(--amber-60)); }
+  #jobs .st-closed { fill: none; stroke: var(--cy-25); stroke-width: 1; }
 
-  #cmdwrap { position: absolute; left: 50%; bottom: 72px; transform: translateX(-50%); width: min(620px, 80vw); }
-  #reply { min-height: 22px; text-align: center; font-size: 14px; color: #bfe2f5; margin-bottom: 14px; letter-spacing: 0.04em; }
-  #reply.shimmer {
-    background: linear-gradient(100deg, #56788c 40%, #eaf7ff 50%, #56788c 60%);
-    background-size: 200% 100%; -webkit-background-clip: text; background-clip: text; color: transparent;
-    animation: sh 1.6s linear infinite;
+  /* ---------- command line + reply chips ---------- */
+  #cmdwrap { position: absolute; left: 50%; bottom: 70px; transform: translateX(-50%); width: min(680px, 84vw); }
+  #reply {
+    display: flex; flex-wrap: wrap; gap: 8px; justify-content: center; align-content: flex-start;
+    min-height: 30px; max-height: 96px; overflow-y: auto; margin-bottom: 14px;
   }
-  @keyframes sh { from { background-position: 200% 0; } to { background-position: -200% 0; } }
-  #cmdline { display: flex; align-items: center; gap: 10px; border-bottom: 1px solid var(--cy-dim); padding-bottom: 8px; }
+  #reply::-webkit-scrollbar { width: 4px; }
+  #reply::-webkit-scrollbar-thumb { background: var(--cy-25); border-radius: 2px; }
+  .rchip {
+    font-size: 13px; letter-spacing: 0.06em; color: var(--ink); white-space: nowrap;
+    max-width: 100%; overflow: hidden; text-overflow: ellipsis;
+    padding: 4px 13px; border: 1px solid var(--cy-25); border-radius: 999px;
+    background: oklch(0.82 0.10 220 / 0.05); box-shadow: inset 0 0 12px oklch(0.82 0.10 220 / 0.07);
+  }
+  .rchip.alert { border-color: var(--amber-60); color: oklch(0.88 0.08 75); }
+  /* thinking: three quiet pips, no gradient tricks */
+  .rchip.wait { color: var(--ink-dim); }
+  .rchip.wait i { display: inline-block; width: 4px; height: 4px; margin-left: 6px; border-radius: 50%;
+    background: var(--cy); vertical-align: 2px; animation: pip 1.2s var(--ease) infinite; }
+  .rchip.wait i:nth-child(2) { animation-delay: 150ms; } .rchip.wait i:nth-child(3) { animation-delay: 300ms; }
+  @keyframes pip { 0%, 100% { opacity: 0.2; transform: translateY(0); } 40% { opacity: 1; transform: translateY(-3px); } }
+
+  #cmdline {
+    display: flex; align-items: center; gap: 10px;
+    border-bottom: 1px solid var(--cy-25); padding-bottom: 8px;
+    transition: border-color 180ms var(--ease), box-shadow 180ms var(--ease);
+  }
+  #cmdline:focus-within { border-color: var(--cy-70); box-shadow: 0 10px 18px -14px var(--cy-40); }
   #cmdline .chev { color: var(--cy); font-size: 15px; }
   #cmd {
-    flex: 1; background: transparent; border: 0; outline: 0; color: #eaf7ff;
+    flex: 1; background: transparent; border: 0; outline: 0; color: var(--ink);
     font: 300 16px "Bahnschrift Light", Bahnschrift, "Segoe UI", sans-serif; letter-spacing: 0.05em;
   }
-  #hint { text-align: center; margin-top: 12px; font-size: 10px; letter-spacing: 0.35em; color: rgba(159,199,220,0.5); }
+  #cmd::placeholder { color: var(--ink-faint); }
+  #hint { text-align: center; margin-top: 12px; font-size: 10px; letter-spacing: 0.35em; text-indent: 0.35em; color: oklch(0.60 0.04 220 / 0.45); }
 </style>
 </head>
 <body>
   <div id="veil"><div id="sweep"></div></div>
+  <svg id="grat" width="620" height="620" viewBox="0 0 620 620">
+    <circle class="g" cx="310" cy="310" r="235" stroke-dasharray="1 6" />
+    <circle class="g rot" cx="310" cy="310" r="262" stroke-dasharray="40 320" />
+    <circle class="g" cx="310" cy="310" r="290" stroke-opacity="0.5" stroke-dasharray="1 10" />
+  </svg>
   <div class="corner tl"></div><div class="corner tr"></div>
   <div class="corner bl"></div><div class="corner br"></div>
 
+  <div id="chrono" class="rv">
+    <span class="rule"></span>
+    <time id="clock"></time>
+    <span class="rule rt"></span>
+  </div>
+
   <div id="center">
-    <div id="clock" class="t-stagger-line"></div>
-    <div id="greet" class="t-stagger-line d1">JARVIS</div>
+    <div id="greet" class="rv d1">JARVIS</div>
+    <div id="centerRule" class="rv d2"></div>
     <div id="focus"></div>
   </div>
 
-  <svg id="dayarc" class="t-stagger-line d3" width="150" height="460" viewBox="0 0 150 460"></svg>
+  <svg id="dayarc" class="rv d3" width="170" height="505" viewBox="0 0 170 505"></svg>
 
-  <div id="money" class="t-stagger-line d4">
-    <svg width="170" height="170" viewBox="0 0 170 170">
-      <circle cx="85" cy="85" r="70" fill="none" stroke="rgba(111,211,255,0.12)" stroke-width="2" />
-      <circle id="fuel" cx="85" cy="85" r="70" fill="none" stroke="#6fd3ff" stroke-width="2.5"
-        stroke-linecap="round" transform="rotate(-90 85 85)" style="filter: drop-shadow(0 0 6px rgba(111,211,255,0.7))" />
-      <circle cx="85" cy="85" r="58" fill="none" stroke="rgba(111,211,255,0.15)" stroke-width="1" stroke-dasharray="1 5" />
-      <text id="allow" x="85" y="82" text-anchor="middle">–</text>
-      <text id="allowsub" x="85" y="102" text-anchor="middle">WEEKLY ALLOWANCE</text>
+  <div id="money" class="rv d4">
+    <svg width="178" height="178" viewBox="0 0 178 178">
+      <circle cx="89" cy="89" r="80" fill="none" stroke="var(--cy-12)" stroke-width="1" stroke-dasharray="1 5" />
+      <circle cx="89" cy="89" r="72" fill="none" stroke="var(--cy-12)" stroke-width="2" />
+      <circle id="fuel" cx="89" cy="89" r="72" fill="none" stroke="var(--cy)" stroke-width="2.5"
+        stroke-linecap="round" transform="rotate(-90 89 89)"
+        style="filter: drop-shadow(0 0 6px oklch(0.82 0.10 220 / 0.7))" />
+      <circle cx="89" cy="89" r="58" fill="none" stroke="var(--cy-12)" stroke-width="1" stroke-dasharray="1 7" />
+      <text id="allow" x="89" y="84" text-anchor="middle">&#8211;</text>
+      <text id="allowsub" x="89" y="103" text-anchor="middle">WEEKLY ALLOWANCE</text>
+      <text id="allowreset" x="89" y="118" text-anchor="middle" opacity="0.7">RESETS SUN</text>
     </svg>
   </div>
 
-  <div id="jobs" class="t-stagger-line d5"></div>
+  <div id="jobswrap" class="rv d5">
+    <div class="micro">Pipeline</div>
+    <svg id="jobs" width="560" height="58" viewBox="0 0 560 58"></svg>
+  </div>
 
-  <div id="cmdwrap" class="t-stagger-line d5">
+  <div id="cmdwrap" class="rv d6">
     <div id="reply"></div>
     <div id="cmdline"><span class="chev">&#10095;</span><input id="cmd" placeholder="Speak or type, Sir." autocomplete="off" /></div>
-    <div id="hint">ESC TO DISMISS</div>
+    <div id="hint">CTRL+SHIFT+SPACE TO SPEAK &#183; ESC TO DISMISS</div>
   </div>
   <audio id="player"></audio>
 <script>
+  // dev stub: lets the file render standalone in a browser for design work
+  if (!window.jarvis) {
+    const SAMPLE = {
+      briefing: "TODAY'S FOCUS\n  1. Judge the Orb and the Summon in daylight.\n  2. Build voice input.\n  3. Reply to LinkedIn comments; pin the repo.\n\n",
+      finance: '| **Weekly allowance** | **EUR 42** |',
+      jobs: '| Mastercard | SWE II | x | - | **Closed** | - | n |\n| Maynooth | RA L1 | x | 07-09 | **Applied** | 07-26 | n |\n| Vodafone | PMO Analyst | x | 07-08 | **Applied** | due | n |\n| eBay | SWE | x | - | **Rejected** | - | n |',
+    };
+    window.jarvis = {
+      read: async (n) => SAMPLE[n] || null,
+      calendar: async () => ({ Events: [
+        { Summary: 'Gym', Start: '12:00', AllDay: false },
+        { Summary: 'Judo', Start: '19:30', AllDay: false },
+        { Summary: 'Clean the bathroom', Start: 'all day', AllDay: true }] }),
+      chat: async (m) => ({ ok: true, text: 'noted · gym 12:00 · allowance EUR 42', say: 'Noted, Sir.' }),
+      speak: async () => null, summonHide: () => {}, onSummonShow: (cb) => setTimeout(cb, 60),
+    };
+  }
+
   const $ = (id) => document.getElementById(id);
 
-  // ---- clock ----
+  // ---- chronometer ----
   function tickClock() {
     const d = new Date();
     $('clock').textContent = d.toLocaleDateString('en-IE', { weekday: 'long', day: 'numeric', month: 'long' }).toUpperCase()
@@ -154,89 +254,135 @@
   async function load() {
     $('greet').textContent = greeting();
 
-    // Top-3 from today's briefing
+    // Top-3 from today's briefing, indexed 01/02/03
     const briefing = stripFm(await window.jarvis.read('briefing'));
     const focus = $('focus'); focus.innerHTML = '';
     const m = briefing && briefing.match(/TODAY'S FOCUS([\s\S]*?)(?:\n\s*\n|$)/);
     const items = m ? m[1].split('\n').filter((l) => /^\s*\d\./.test(l)).slice(0, 3) : [];
     items.forEach((l, i) => {
-      const div = document.createElement('div');
-      div.className = 'focus t-stagger-line d' + (i + 2);
-      div.textContent = l.replace(/^\s*\d\.\s*/, '').trim();
-      focus.append(div);
+      const row = document.createElement('div');
+      row.className = 'focus rv d' + (i + 2);
+      const ix = document.createElement('span'); ix.className = 'ix'; ix.textContent = '0' + (i + 1);
+      const tx = document.createElement('b'); tx.textContent = l.replace(/^\s*\d\.\s*/, '').trim();
+      row.append(ix, tx); focus.append(row);
     });
     if (!items.length) {
-      const div = document.createElement('div');
-      div.className = 'focus t-stagger-line d2';
-      div.textContent = 'No briefing yet today. Ask me for one.';
-      focus.append(div);
+      const row = document.createElement('div');
+      row.className = 'focus rv d2';
+      row.textContent = 'No briefing yet today. Ask me for one.';
+      focus.append(row);
     }
-
-    // day arc (06:00-24:00 vertical) with events
+    // day arc (06:00-24:00) with hour ticks, events, and a NOW marker
     try {
       const cal = await window.jarvis.calendar();
       const svg = $('dayarc');
-      let s = '<line x1="30" y1="10" x2="30" y2="450" stroke="rgba(111,211,255,0.25)" stroke-width="1"/>';
-      for (let h = 6; h <= 24; h += 3) {
-        const y = 10 + ((h - 6) / 18) * 440;
-        s += `<line x1="24" y1="${y}" x2="36" y2="${y}" stroke="rgba(111,211,255,0.4)" stroke-width="1"/>` +
-             `<text x="6" y="${y + 3}">${String(h).padStart(2, '0')}</text>`;
+      const Y = (h) => 12 + ((h - 6) / 18) * 446;
+      let s = `<line x1="34" y1="${Y(6)}" x2="34" y2="${Y(24)}" stroke="var(--cy-25)" stroke-width="1"/>`;
+      for (let h = 6; h <= 24; h++) {
+        const major = h % 3 === 0;
+        s += `<line x1="${major ? 27 : 30.5}" y1="${Y(h)}" x2="${major ? 41 : 37.5}" y2="${Y(h)}"
+                stroke="var(${major ? '--cy-40' : '--cy-12'})" stroke-width="1"/>`;
+        if (major) s += `<text x="4" y="${Y(h) + 3}">${String(h).padStart(2, '0')}</text>`;
       }
       const now = new Date(); const nh = now.getHours() + now.getMinutes() / 60;
-      if (nh >= 6) {
-        const y = 10 + ((Math.min(nh, 24) - 6) / 18) * 440;
-        s += `<circle cx="30" cy="${y}" r="3" fill="#6fd3ff" style="filter:drop-shadow(0 0 5px #6fd3ff)"/>`;
+      if (nh >= 6 && nh <= 24) {
+        s += `<circle cx="34" cy="${Y(nh)}" r="3" fill="var(--cy)" style="filter:drop-shadow(0 0 5px var(--cy))"/>` +
+             `<text class="nowlabel" x="46" y="${Y(nh) - 6}">NOW</text>`;
       }
       for (const e of (cal && cal.Events) || []) {
         if (e.AllDay) continue;
         const [hh, mm] = e.Start.split(':').map(Number);
-        const y = 10 + ((hh + mm / 60 - 6) / 18) * 440;
-        s += `<line x1="30" y1="${y}" x2="52" y2="${y}" stroke="#6fd3ff" stroke-width="1" opacity="0.7"/>` +
-             `<text class="evlabel" x="58" y="${y + 3}">${e.Start}  ${e.Summary.slice(0, 14).toUpperCase()}</text>`;
+        const y = Y(hh + mm / 60);
+        s += `<line x1="34" y1="${y}" x2="56" y2="${y}" stroke="var(--cy-70)" stroke-width="1"/>` +
+             `<circle cx="56" cy="${y}" r="1.5" fill="var(--cy)"/>` +
+             `<text class="evlabel" x="63" y="${y + 3}">${e.Start}&#160;&#160;${e.Summary.slice(0, 13).toUpperCase()}</text>`;
       }
       const allday = ((cal && cal.Events) || []).filter((e) => e.AllDay);
-      allday.forEach((e, i) => { s += `<text class="evlabel" x="6" y="${430 + i * 14}" opacity="0.7">✦ ${e.Summary.slice(0, 16).toUpperCase()}</text>`; });
+      allday.forEach((e, i) => {
+        s += `<text class="evlabel" x="4" y="${Y(24) + 20 + i * 15}" opacity="0.65">&#9670; ${e.Summary.slice(0, 22).toUpperCase()}</text>`;
+      });
       svg.innerHTML = s;
     } catch {}
 
-    // allowance fuel ring: remaining fraction of the money-week (resets Sunday)
+    // allowance instrument: remaining fraction of the money-week (resets Sunday), arc draws in
     const fin = stripFm(await window.jarvis.read('finance'));
     const am = fin && fin.match(/Weekly allowance[^|]*\|\s*\*{0,2}(EUR\s*\d+)/i);
     $('allow').textContent = am ? am[1].replace('EUR', '€') : '–';
-    const day = (new Date().getDay() + 7) % 7;                 // 0=Sun ... 6=Sat
-    const remaining = 1 - (day + new Date().getHours() / 24) / 7;
-    const C = 2 * Math.PI * 70;
-    $('fuel').setAttribute('stroke-dasharray', `${C * Math.max(0.02, remaining)} ${C}`);
+    const day = (new Date().getDay() + 7) % 7;
+    const remaining = Math.max(0.02, 1 - (day + new Date().getHours() / 24) / 7);
+    const C = 2 * Math.PI * 72;
+    const fuel = $('fuel');
+    fuel.setAttribute('stroke-dasharray', `${C} ${C}`);
+    fuel.style.strokeDashoffset = C;                        // start empty ...
+    requestAnimationFrame(() => requestAnimationFrame(() => {
+      fuel.style.strokeDashoffset = C * (1 - remaining);    // ... sweep to the true reading
+    }));
 
-    // jobs constellation
+    // pipeline constellation: linked stars, colored by status
     const jobs = stripFm(await window.jarvis.read('jobs'));
-    const wrap = $('jobs'); wrap.innerHTML = '';
+    const svg = $('jobs'); let stars = [];
     const rows = (jobs.match(/^\|[^|\n]+\|[^\n]+$/gm) || []).filter((r) => !/^(\|\s*Company|\|[-\s|]+$)/i.test(r));
-    for (const r of rows.slice(0, 6)) {
+    rows.slice(0, 7).forEach((r, i, arr) => {
       const c = r.split('|').map((x) => x.trim());
-      const co = (c[1] || '').replace(/~~/g, ''); const status = c[5] || '';
-      if (!co) continue;
-      const d = document.createElement('div');
-      d.className = 'jdot' + (/closed|reject|skip/i.test(status) ? ' closed' : /⏰|due/i.test(status + (c[6] || '')) ? ' due' : '');
-      d.innerHTML = '<i></i>' + co.split(' ')[0].slice(0, 10);
-      d.title = co + ' - ' + status.replace(/[*✅]/g, '');
-      wrap.append(d);
-    }
+      const co = (c[1] || '').replace(/~~/g, ''); if (!co) return;
+      const status = (c[5] || '') + ' ' + (c[6] || '');
+      const cls = /closed|reject|skip/i.test(status) ? 'st-closed' : /due|⏰/i.test(status) ? 'st-due' : 'st-live';
+      const n = Math.min(arr.length, 7);
+      const x = 40 + (480 / Math.max(n - 1, 1)) * i;
+      const y = 18 + ((i * 37) % 3) * 7;                    // deterministic scatter, no randomness
+      stars.push({ x, y, co: co.split(' ')[0].slice(0, 10), cls, full: co + ' · ' + status.replace(/[*✅]/g, '').trim() });
+    });
+    let s = '';
+    for (let i = 1; i < stars.length; i++)
+      s += `<line class="lk" x1="${stars[i - 1].x}" y1="${stars[i - 1].y}" x2="${stars[i].x}" y2="${stars[i].y}"/>`;
+    for (const st of stars)
+      s += `<circle class="${st.cls}" cx="${st.x}" cy="${st.y}" r="3.5"><title>${st.full}</title></circle>` +
+           `<text x="${st.x}" y="${st.y + 22}" text-anchor="middle">${st.co}</text>`;
+    svg.innerHTML = s;
   }
 
   // ---- command line ----
   const cmd = $('cmd'); const reply = $('reply');
-  $('cmd').addEventListener('keydown', async (e) => {
+
+  // replies render as key-phrase chips, never paragraphs
+  function showReply(text, kind) {
+    reply.innerHTML = '';
+    if (kind === 'wait') {
+      const c = document.createElement('span');
+      c.className = 'rchip wait'; c.textContent = 'Jarvis is on it';
+      c.append(...[0, 1, 2].map(() => document.createElement('i')));
+      reply.append(c); return;
+    }
+    const parts = String(text)
+      .split(/\s+[·•|]\s+|(?<=[.!?])\s+/)
+      .map((s) => s.trim().replace(/[.·]+$/, ''))
+      .filter(Boolean)
+      .slice(0, 10);
+    for (const p of parts) {
+      const c = document.createElement('span');
+      c.className = 'rchip' + (kind ? ' ' + kind : '');
+      c.textContent = p; c.title = p;
+      reply.append(c);
+    }
+  }
+  // safety cap if a spoken line arrives overlong: first ~2 sentences only
+  function speakable(text) {
+    const clean = String(text).replace(/\s+[·•|]\s+/g, '. ');
+    const m = clean.match(/^[\s\S]{0,220}?[.!?](?:\s|$)/);
+    return (m ? m[0] : clean.slice(0, 220)).trim();
+  }
+
+  cmd.addEventListener('keydown', async (e) => {
     if (e.key !== 'Enter') return;
     const msg = cmd.value.trim(); if (!msg) return;
     cmd.value = '';
-    reply.classList.add('shimmer'); reply.textContent = 'Jarvis is on it…';
+    showReply('', 'wait');
     const res = await window.jarvis.chat(msg);
-    reply.classList.remove('shimmer');
-    reply.textContent = res.text;
+    showReply(res.text, res.ok ? '' : 'alert');
     if (res.ok) {
-      const f = await window.jarvis.speak(res.text.slice(0, 400));
-      if (f) { const p = $('player'); p.src = 'file:///' + String(f).replace(/\\/g, '/'); p.play().catch(() => {}); }
+      window.jarvis.speak(speakable(res.say || res.text)).then((f) => {
+        if (f) { const p = $('player'); p.src = 'file:///' + String(f).replace(/\\/g, '/'); p.play().catch(() => {}); }
+      }).catch(() => {});
       load();
     }
   });
@@ -245,7 +391,7 @@
   window.addEventListener('keydown', (e) => { if (e.key === 'Escape') window.jarvis.summonHide(); });
   window.jarvis.onSummonShow(() => {
     document.body.classList.remove('on');
-    void document.body.offsetHeight;      // reflow so the stagger replays
+    void document.body.offsetHeight;      // reflow so the materialize replays
     document.body.classList.add('on');
     load();
     setTimeout(() => cmd.focus(), 350);
