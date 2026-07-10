@@ -1,7 +1,7 @@
 // Jarvis Companion - main process
 // Tray butler: dashboard window, HUD one-liners, voice, chat. The app shell READS and DISPLAYS;
 // all writes happen through the real Jarvis skill (chat) or existing scripts. Single-writer rule.
-const { app, Tray, Menu, BrowserWindow, ipcMain, nativeImage, screen, shell, globalShortcut } = require('electron');
+const { app, Tray, Menu, BrowserWindow, ipcMain, nativeImage, screen, shell, globalShortcut, session } = require('electron');
 const path = require('path');
 const fs = require('fs');
 
@@ -12,7 +12,8 @@ const APP_CONFIG = path.join(__dirname, 'app-config.json');
 
 const { runPowerShell, runCollector } = require('./lib/run');
 const { speak } = require('./lib/voice');
-const { sendChat } = require('./lib/chat');
+const { sendChat, prewarm } = require('./lib/chat');
+const { transcribe, sttAvailable } = require('./lib/stt');
 
 let tray = null;
 let dashboard = null;
@@ -63,8 +64,8 @@ function refreshTrayMenu() {
 function createOrb() {
   const wa = screen.getPrimaryDisplay().workArea;
   orb = new BrowserWindow({
-    width: 130, height: 130,
-    x: wa.x + wa.width - 150, y: wa.y + wa.height - 150,
+    width: 104, height: 104,
+    x: wa.x + wa.width - 124, y: wa.y + wa.height - 124,
     frame: false, transparent: true, resizable: false, alwaysOnTop: true,
     skipTaskbar: true, hasShadow: false, show: true,
     webPreferences: { preload: path.join(__dirname, 'preload.js'), contextIsolation: true },
@@ -87,6 +88,7 @@ function orbPlay(file) {
 // ---------- summon (full-screen HUD overlay) ----------
 function toggleSummon() {
   if (summon && !summon.isDestroyed() && summon.isVisible()) { summon.hide(); return; }
+  prewarm();                       // claude session boots while Alex reads the HUD and types
   if (!summon || summon.isDestroyed()) {
     const b = screen.getPrimaryDisplay().bounds;
     summon = new BrowserWindow({
@@ -145,7 +147,7 @@ function pushHud(text, opts) {
     setTimeout(() => { if (hud && !hud.isDestroyed()) hud.hide(); }, 260);
   }, opts.holdMs || 7000);
   if (!state.muted && opts.speak !== false) {
-    speak(text, state.voice).then(file => orbPlay(file)).catch(() => {});
+    speak(opts.say || text, state.voice).then(file => orbPlay(file)).catch(() => {});
   }
 }
 
@@ -169,6 +171,40 @@ function debriefNow() {
   runPowerShell(path.join(BIN, 'jarvis-debrief.ps1'), [])
     .then(() => showHud('Debrief refreshed and emailed, Sir.', { speak: true }))
     .catch(() => showHud('The debrief run failed, Sir. Check the log.', { kind: 'alert', speak: true }));
+}
+
+// ---------- voice input (Ctrl+Shift+Space: press to talk, auto-stops on silence) ----------
+let listening = false;
+function toggleListen() {
+  if (!orb || orb.isDestroyed()) return;
+  if (!listening && !sttAvailable()) {
+    showHud('Voice input needs Whisper, Sir - run scripts/setup-whisper.ps1 once.', { kind: 'alert', speak: false });
+    return;
+  }
+  listening = !listening;
+  if (listening) {
+    prewarm();                                  // session boots while Alex speaks
+    if (state.orbHidden) toggleOrb();           // listening deserves a visible ear
+    orb.webContents.send('mic:start');
+  } else {
+    orb.webContents.send('mic:stop');           // manual stop: transcribe whatever was said
+  }
+}
+
+async function handleSpeech(wavBuf) {
+  listening = false;
+  const tmp = path.join(require('os').tmpdir(), `jarvis-mic-${Date.now()}.wav`);
+  try {
+    fs.writeFileSync(tmp, Buffer.from(wavBuf));
+    const text = await transcribe(tmp);
+    if (!text || text.length < 2) { showHud('I caught nothing intelligible, Sir.', { speak: false, holdMs: 3000 }); return; }
+    showHud('“' + text + '”', { speak: false, holdMs: 5000 });
+    const res = await sendChat(text);
+    // chips on screen, natural sentence aloud
+    showHud(res.text, { kind: res.ok ? 'info' : 'alert', holdMs: 9000, say: res.say });
+  } catch (err) {
+    showHud('Transcription failed, Sir: ' + String(err.message).slice(0, 120), { kind: 'alert', speak: false });
+  } finally { try { fs.unlinkSync(tmp); } catch {} }
 }
 
 // ---------- watchers ----------
@@ -249,6 +285,12 @@ function registerIpc() {
   ipcMain.handle('voice:speak', async (_ev, text) => state.muted ? null : speak(text, state.voice));
   ipcMain.handle('app:state', () => state);
   ipcMain.handle('app:setVoice', (_ev, v) => { state.voice = v; saveState(); return state; });
+  ipcMain.handle('mic:audio', (_ev, wavBuf) => handleSpeech(wavBuf));
+  ipcMain.on('mic:cancelled', (_ev, reason) => {
+    listening = false;
+    if (reason === 'denied') showHud('Microphone blocked, Sir - allow it in Windows privacy settings.', { kind: 'alert', speak: false });
+    else showHud('Never mind, Sir.', { speak: false, holdMs: 2200 });
+  });
   ipcMain.on('hud:clicked', () => { if (hud && !hud.isDestroyed()) hud.hide(); toggleSummon(); });
   ipcMain.on('summon:toggle', () => toggleSummon());
   ipcMain.on('orb:hide', () => { if (!state.orbHidden) toggleOrb(); });
@@ -261,6 +303,8 @@ if (!gotLock) app.quit();
 else {
   app.setAppUserModelId('com.alexdrozdovs.jarvis');   // R-C: required for Windows notifications
   app.whenReady().then(() => {
+    // mic only, and only for our own file:// renderers (voice input lives in the orb)
+    session.defaultSession.setPermissionRequestHandler((_wc, permission, cb) => cb(permission === 'media'));
     createTray();
     createOrb();
     registerIpc();
@@ -269,7 +313,9 @@ else {
       console.error('summon hotkey registration failed');
     }
     globalShortcut.register('Control+Shift+O', toggleOrb);
+    globalShortcut.register('Control+Shift+Space', toggleListen);
     if (process.argv.includes('--show')) toggleSummon();
+    prewarm();                       // first chat of the session shouldn't pay boot cost either
     showHud('At your service, Sir.', { speak: true, holdMs: 5000 });
   });
   app.on('will-quit', () => globalShortcut.unregisterAll());
