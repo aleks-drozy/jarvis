@@ -351,8 +351,14 @@
       }
       const now = new Date(); const nh = now.getHours() + now.getMinutes() / 60;
       if (nh >= 6 && nh <= 24) {
-        s += `<circle cx="34" cy="${Y(nh)}" r="3" fill="var(--cy)" style="filter:drop-shadow(0 0 5px var(--cy))"/>` +
-             `<text class="nowlabel" x="46" y="${Y(nh) - 6}">NOW</text>`;
+        s += `<circle cx="34" cy="${Y(nh)}" r="3" fill="var(--cy)" style="filter:drop-shadow(0 0 5px var(--cy))"/>`;
+        // the dot always shows; the label yields when an event sits within 45 min of now
+        const crowded = (((cal && cal.Events) || []).some((e) => {
+          if (e.AllDay) return false;
+          const [hh, mm] = e.Start.split(':').map(Number);
+          return Math.abs((hh + mm / 60) - nh) < 0.75;
+        }));
+        if (!crowded) s += `<text class="nowlabel" x="46" y="${Y(nh) - 6}">NOW</text>`;
       }
       // strip "(Morning)"-style suffixes, then cut at a word boundary - no mid-word amputations
       const evName = (t, max) => {
