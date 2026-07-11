@@ -17,7 +17,7 @@ CS & Software Engineering graduate (Maynooth University, 2026), Dublin.
 - Discovers git repos recursively and reports yesterday's commits (with hashes; every claim in a
   briefing must cite its source or say "unavailable")
 - Reads my Obsidian vault for goals, budget and trackers
-- Sweeps job boards (Jooble/Adzuna APIs) for fresh Dublin roles, filtered by seniority tier
+- Sweeps job boards (Jooble for Dublin; Adzuna for UK/other regions) for fresh roles, ranked by seniority tier
 - Reads job-alert emails (LinkedIn, Indeed, gradireland, Workday) via raw IMAP, headers only
 - Computes my weekly budget and savings pace
 - Assembles a "Today's Focus" top-3, writes the briefing to my vault, and emails it to me
@@ -33,7 +33,7 @@ jarvis-debrief.ps1 ------- headless run guard: note must be FRESHLY written or n
 claude -p (agent skill) --> writes briefing --> send-debrief.ps1 --> Gmail SMTP --> my inbox
    |         |                                                          (UTF-8, self-only)
    |         +-- collect-activity.ps1   git discovery + commits + session activity (JSON)
-   |         +-- search-jobs.ps1        Jooble/Adzuna job APIs, seniority-tiered
+   |         +-- search-jobs.ps1        Jooble/Adzuna job-board APIs (raw results; tiering is in the skill)
    |         +-- check-job-mail.ps1     raw IMAP job-alert reader (headers only)
    |
    +-- skill/SKILL.md                   personality, intents, HARD safety rules

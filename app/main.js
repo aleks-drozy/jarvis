@@ -13,7 +13,7 @@ const APP_CONFIG = path.join(__dirname, 'app-config.json');
 const { runPowerShell, runCollector } = require('./lib/run');
 const { speak } = require('./lib/voice');
 const { sendChat, prewarm } = require('./lib/chat');
-const { transcribe, sttAvailable } = require('./lib/stt');
+const { transcribe, sttAvailable, sttDiagnosis } = require('./lib/stt');
 
 let tray = null;
 let dashboard = null;
@@ -183,7 +183,7 @@ function micUi(on) {      // the Summon runs hot (amber) while Jarvis listens
 function startListen(auto) {
   if (!orb || orb.isDestroyed() || listening) return;
   if (!sttAvailable()) {
-    if (!auto) showHud('Voice input needs Whisper, Sir - run scripts/setup-whisper.ps1 once.', { kind: 'alert', speak: false });
+    if (!auto) showHud(sttDiagnosis().reason, { kind: 'alert', speak: false });
     return;
   }
   listening = true; autoListen = !!auto;
@@ -333,6 +333,9 @@ else {
   app.whenReady().then(() => {
     // mic only, and only for our own file:// renderers (voice input lives in the orb)
     session.defaultSession.setPermissionRequestHandler((_wc, permission, cb) => cb(permission === 'media'));
+    // Some Chromium builds consult a permission CHECK (not just a request) for getUserMedia; the orb
+    // may be hidden when auto-arming the mic, so grant 'media' here too or listening can silently no-op.
+    session.defaultSession.setPermissionCheckHandler((_wc, permission) => permission === 'media');
     createTray();
     createOrb();
     registerIpc();

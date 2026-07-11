@@ -147,7 +147,7 @@ $('chatform').addEventListener('submit', async (e) => {
     thinking.remove();
     addMsg('jarvis', res.text);
     if (res.ok) {
-      const file = await window.jarvis.speak(res.text.slice(0, 400));
+      const file = await window.jarvis.speak((res.say || res.text).slice(0, 400));
       if (file) { const p = $('dashPlayer'); p.src = 'file:///' + String(file).replace(/\\/g, '/'); p.play().catch(() => {}); }
       refreshAll(); // he may have updated trackers
     }
