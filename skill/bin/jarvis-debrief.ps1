@@ -49,11 +49,23 @@ try {
     throw "headless generation produced no fresh note (see .jarvis-claude.log) - not sending a stale debrief"
   }
 
-  & powershell -NoProfile -File $sender -NotePath $note
+  # Send IN-PROCESS (dot-source) so a send failure is a terminating error caught below. An external
+  # `& powershell -NoProfile -File $sender` does NOT propagate its non-zero exit into this try, so a
+  # failed delivery (SMTP down, expired app password, no network) would fall through and be logged as
+  # "run ok" with a success toast — a silent miss of the actual deliverable. (Safety: the sender's
+  # own Safety-rule-2 guard locks the recipient to the owner.)
+  . $sender -DotSourceOnly
+  Send-Debrief -NotePath $note -ToAddress $OwnerEmail
   Toast "Debrief ready, Sir."
   "$([datetime]::Now.ToString('s')) run ok (note written $((Get-Item $note).LastWriteTime.ToString('t')))" | Add-Content $log
 } catch {
   $err = $_.Exception.Message
   "$([datetime]::Now.ToString('s')) run FAILED: $err" | Add-Content $log
+  # Leave a VISIBLE stub so a failed morning can't masquerade as a quiet day. Only if generation
+  # produced no note; on a send-only failure the real (unsent) note is kept and the log/toast alarm.
+  if (-not (Test-Path $note)) {
+    "# Debrief FAILED - $([datetime]::Now.ToString('yyyy-MM-dd HH:mm'))`n`n$err`n`nSee .jarvis.log and .jarvis-claude.log." |
+      Set-Content -Encoding UTF8 $note
+  }
   Toast "Jarvis debrief failed - check .jarvis.log"
 }

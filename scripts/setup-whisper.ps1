@@ -7,8 +7,11 @@ New-Item -ItemType Directory -Force $dest | Out-Null
 $dest = (Resolve-Path $dest).Path
 [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
 
+# Keep this in sync with CLI_CANDIDATES in app/lib/stt.js. main.exe is the deprecated stub (exits 1).
+$cliNames = @('whisper-cli.exe', 'whisper.exe', 'whisper-cpp.exe')
+
 # 1) CLI binary from the latest GitHub release (asset *bin-x64*.zip)
-$existing = Get-ChildItem $dest -Recurse -Include 'whisper-cli.exe' -ErrorAction SilentlyContinue | Select-Object -First 1
+$existing = Get-ChildItem $dest -Recurse -Include $cliNames -ErrorAction SilentlyContinue | Select-Object -First 1
 if ($existing) {
   "CLI already present: $($existing.FullName)"
 } else {
@@ -19,8 +22,11 @@ if ($existing) {
   Invoke-WebRequest $asset.browser_download_url -OutFile $zip
   Expand-Archive $zip -DestinationPath $dest -Force
   Remove-Item $zip
-  $exe = Get-ChildItem $dest -Recurse -Include 'whisper-cli.exe' | Select-Object -First 1
-  if (-not $exe) { throw 'no whisper CLI exe found in the release zip' }
+  $exe = Get-ChildItem $dest -Recurse -Include $cliNames | Select-Object -First 1
+  if (-not $exe) {
+    $foundExes = (Get-ChildItem $dest -Recurse -Filter *.exe | Select-Object -ExpandProperty Name) -join ', '
+    throw "expected one of [$($cliNames -join ', ')] in release $($rel.tag_name); the zip contained: $foundExes. whisper.cpp may have renamed its CLI - add the new name to `$cliNames here and CLI_CANDIDATES in app/lib/stt.js."
+  }
   "CLI: $($exe.FullName) (release $($rel.tag_name))"
 }
 

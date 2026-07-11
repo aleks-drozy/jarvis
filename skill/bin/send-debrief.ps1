@@ -1,12 +1,13 @@
 # skill/bin/send-debrief.ps1
 # Sends today's debrief note to Alex via Gmail SMTP (app password from a DPAPI-encrypted PSCredential).
-# Recipient defaults to Alex's own address and must stay self-only — Safety rule 2.
+# Recipient is LOCKED to Alex's own address — Safety rule 2 (self-only), enforced in code below.
 param(
   [string]$NotePath,
-  [string]$ToAddress = 'aleksandrs.drozdovs2005@gmail.com',
+  [string]$ToAddress,
   [switch]$DotSourceOnly
 )
 $ErrorActionPreference = 'Stop'
+$OwnerEmail = 'aleksandrs.drozdovs2005@gmail.com'   # Safety rule 2: the ONLY permitted recipient
 
 function Build-DebriefMail {
   param([string]$NotePath, [string]$ToAddress)
@@ -25,7 +26,12 @@ function Get-AppPassword {
 }
 
 function Send-Debrief {
-  param([string]$NotePath, [string]$ToAddress)
+  param([string]$NotePath, [string]$ToAddress = $OwnerEmail)
+  # Safety rule 2 (self-only): refuse ANY recipient other than the owner, BEFORE reading the
+  # credential or touching the network. A prompt-injected Jarvis must not be able to exfiltrate.
+  if ($ToAddress -ne $OwnerEmail) {
+    throw "Safety rule 2 (self-only): refusing to email '$ToAddress' - recipient is locked to $OwnerEmail."
+  }
   $mail = Build-DebriefMail -NotePath $NotePath -ToAddress $ToAddress
   $cred = Get-AppPassword
   Send-MailMessage -From $cred.UserName -To $mail.To -Subject $mail.Subject -Body $mail.Body `
@@ -34,5 +40,6 @@ function Send-Debrief {
 
 if ($DotSourceOnly) { return }
 if (-not $NotePath) { throw "-NotePath required" }
+if (-not $ToAddress) { $ToAddress = $OwnerEmail }   # single source of truth for the recipient
 Send-Debrief -NotePath $NotePath -ToAddress $ToAddress
 Write-Host "Debrief emailed to $ToAddress"

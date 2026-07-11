@@ -35,7 +35,7 @@ NEVER scrape LinkedIn/Indeed directly — ToS violation, account-ban risk (see 2
    design; emphasise per role; NEVER invent facts; NO em dashes anywhere (Alex's rule: they read as
    AI tells to hiring managers).
 3. Cover letter: write to `C:\Users\Alex\ObsidianVault\claude-memory\12-jarvis\outreach\<company>-<role>.md`
-   stamped "REVIEW - NOT SENT" (Safety 3), naming which CV variant to attach. NO em dashes in letter
+   stamped "REVIEW — NOT SENT" (Safety 3), naming which CV variant to attach. NO em dashes in letter
    bodies. NEVER submit or email it yourself.
 4. Alex clicks submit himself. When he says he applied, set status **Applied** + date, and set
    "Follow-up due" = applied date + 10 days.
