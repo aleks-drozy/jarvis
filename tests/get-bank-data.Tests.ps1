@@ -146,4 +146,9 @@ foreach ($f in @("$PSScriptRoot\..\skill\bin\get-bank-data.ps1", "$PSScriptRoot\
   Assert ($bad -eq 0) "$(Split-Path $f -Leaf) must be pure ASCII (found $bad non-ASCII bytes)"
 }
 
+# 10. Consent-date helper (setup-bank.ps1): the app needs a YYYY-MM-DD from the ISO valid_until.
+. "$PSScriptRoot\..\skill\bin\setup-bank.ps1" -DotSourceOnly 2>$null
+Assert ((Get-ConsentDate -ValidUntil '2026-10-12T16:00:00Z') -eq '2026-10-12') "Get-ConsentDate strips the time"
+Assert ($null -eq (Get-ConsentDate -ValidUntil '')) "empty valid_until -> null"
+
 Write-Host "get-bank-data: ALL PASS"

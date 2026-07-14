@@ -23,6 +23,7 @@ param(
   [string]$RedirectUrl = 'https://localhost/jarvis-bank-consent-done',
   [switch]$ExchangeCode, [string]$Code, [string]$State,
   [switch]$CheckSession,
+  [switch]$DotSourceOnly,
   [string]$CredPath    = (Join-Path $HOME '.jarvis\enablebanking.cred.xml'),
   [string]$StatePath   = (Join-Path $HOME '.jarvis\bank.json'),
   [string]$PendingPath = (Join-Path $HOME '.jarvis\bank-pending.json'),
@@ -35,6 +36,9 @@ $ErrorActionPreference = 'Stop'
 $myCred = $CredPath; $myState = $StatePath
 . "$PSScriptRoot\get-bank-data.ps1" -DotSourceOnly
 $CredPath = $myCred; $StatePath = $myState
+
+function Get-ConsentDate { param([string]$ValidUntil) if (-not $ValidUntil) { return $null }; return ($ValidUntil -replace 'T.*$', '') }
+if ($DotSourceOnly) { return }
 
 if (-not (Test-Path $KeyDir)) { New-Item -ItemType Directory -Force $KeyDir | Out-Null }
 
@@ -97,15 +101,16 @@ if ($NewSession) {
   $cred = Import-Clixml $CredPath
   $jwt = New-EnableBankingJwt -ApplicationId $cred.UserName -PrivateKeyPem $cred.GetNetworkCredential().Password
   $state = 'jarvis-' + [Guid]::NewGuid().ToString('N').Substring(0, 16)
+  $validUntil = (Get-Date).AddDays($ValidDays).ToString('yyyy-MM-ddTHH:mm:ssZ')
   $body = @{
     aspsp = @{ name = $AspspName; country = $AspspCountry }
-    access = @{ valid_until = (Get-Date).AddDays($ValidDays).ToString('yyyy-MM-ddTHH:mm:ssZ') }
+    access = @{ valid_until = $validUntil }
     redirect_url = $RedirectUrl
     state = $state
     psu_type = 'personal'
   }
   $resp = Invoke-EBApi $jwt -Method 'Post' -Path '/auth' -BodyObj $body
-  @{ state = $state; aspsp_name = $AspspName; aspsp_country = $AspspCountry; created = (Get-Date).ToString('s') } |
+  @{ state = $state; aspsp_name = $AspspName; aspsp_country = $AspspCountry; valid_until = $validUntil; created = (Get-Date).ToString('s') } |
     ConvertTo-Json | Set-Content -Encoding UTF8 $PendingPath
   Write-Host ''
   Write-Host 'OPEN THIS LINK IN YOUR BROWSER and approve READ-ONLY access at your bank:'
@@ -126,7 +131,8 @@ if ($ExchangeCode) {
   $jwt = New-EnableBankingJwt -ApplicationId $cred.UserName -PrivateKeyPem $cred.GetNetworkCredential().Password
   $resp = Invoke-EBApi $jwt -Method 'Post' -Path '/sessions' -BodyObj @{ code = $Code }
   $accounts = @($resp.accounts) | ForEach-Object { @{ uid = $_.uid; name = $_.name; currency = $_.currency; account_id = $_.account_id } }
-  @{ session_id = $resp.session_id; accounts = $accounts; linked = (Get-Date).ToString('s') } |
+  $consentExpires = Get-ConsentDate -ValidUntil $pending.valid_until
+  @{ session_id = $resp.session_id; accounts = $accounts; consent_expires = $consentExpires; linked = (Get-Date).ToString('s') } |
     ConvertTo-Json -Depth 6 | Set-Content -Encoding UTF8 $StatePath
   Remove-Item $PendingPath -Force -ErrorAction SilentlyContinue
   Write-Host ("Linked. Accounts: {0}" -f $accounts.Count)
