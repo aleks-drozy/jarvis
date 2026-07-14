@@ -48,7 +48,13 @@ function New-EnableBankingJwt {
   # application id from the control panel (NOT a cert fingerprint - confirmed from EB API docs).
   param([string]$ApplicationId, [string]$PrivateKeyPem)
   $openssl = Get-OpenSslPath
-  $now = [int][double]::Parse((Get-Date -UFormat %s -Millisecond 0))
+  # NOT `Get-Date -UFormat %s`: in Windows PowerShell 5.1 it computes epoch seconds from local
+  # wall-clock time WITHOUT correcting for the UTC offset, so on any machine not at UTC+0 every
+  # JWT's iat/exp is skewed by exactly the local offset (1 hour on this BST machine) - Enable
+  # Banking correctly rejects the result as "JWT can not be issued in the future" (401). Confirmed
+  # by direct comparison 2026-07-14: UFormat gave 1784045929 vs the true 1784042329, a 3600s gap
+  # matching the +01:00 offset exactly. DateTimeOffset.ToUnixTimeSeconds() is unambiguous UTC.
+  $now = [DateTimeOffset]::UtcNow.ToUnixTimeSeconds()
   $header  = @{ typ = 'JWT'; alg = 'RS256'; kid = $ApplicationId } | ConvertTo-Json -Compress
   $payload = @{ iss = 'enablebanking.com'; aud = 'api.enablebanking.com'; iat = $now; exp = ($now + 3600) } | ConvertTo-Json -Compress
   $h64 = ConvertTo-Base64Url ([Text.Encoding]::UTF8.GetBytes($header))
