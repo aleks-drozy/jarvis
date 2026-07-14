@@ -34,6 +34,7 @@ let liveState = {
   health: 'unknown',
 };
 let pushTimer = null;
+let chatInFlightCount = 0;
 function pushLive() {
   clearTimeout(pushTimer);
   pushTimer = setTimeout(() => {
@@ -70,7 +71,10 @@ function refreshBank() {
   pushLive();
 }
 
+let schedulerPolling = false;
 async function pollScheduler() {
+  if (schedulerPolling) return;
+  schedulerPolling = true;
   try {
     const s = await runCollector(path.join(BIN, 'scheduler-status.ps1'), []);
     liveState.scheduler.registered = (s && typeof s.registered === 'boolean') ? s.registered : null;
@@ -79,14 +83,15 @@ async function pollScheduler() {
     liveState.scheduler.nextRun = (s && s.nextRun) || null;
   } catch {
     liveState.scheduler.registered = null; liveState.scheduler.enabled = null;
-  }
+    liveState.scheduler.state = null; liveState.scheduler.nextRun = null;
+  } finally { schedulerPolling = false; }
   pushLive();
 }
 
 async function sendChatTracked(message) {
-  liveState.chat.inFlight = true; pushLive();
+  chatInFlightCount++; liveState.chat.inFlight = true; pushLive();
   try { return await sendChat(message); }
-  finally { liveState.chat.inFlight = false; pushLive(); }
+  finally { chatInFlightCount = Math.max(0, chatInFlightCount - 1); liveState.chat.inFlight = chatInFlightCount > 0; pushLive(); }
 }
 
 // ---------- tray ----------
