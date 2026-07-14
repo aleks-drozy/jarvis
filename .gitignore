@@ -10,3 +10,4 @@ app/package-lock.json
 app/chat-timing.log
 app/vendor/
 .superpowers/
+app/smoke-*.log
