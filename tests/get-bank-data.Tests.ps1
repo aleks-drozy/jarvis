@@ -121,7 +121,16 @@ $s1 = Format-BankSummary $fake1
 Assert ($s1.accounts[0].last30d.txCount -eq 1) "single-transaction account must count exactly 1 (array-unwrap scar)"
 Assert ($s1.totals.moneyOut -eq [decimal]5.00) "single-transaction sum must be correct"
 
-# 7. This codebase must NEVER call the payment-initiation side of this API in actual code (Safety
+# 7. Regression: Enable Banking validates the `country` query/body parameter against ^[A-Z]{2}$
+#    and 422s on lowercase - confirmed live 2026-07-14 ("ie" rejected, "IE" accepted). This bug
+#    was masked for a while by an unrelated 403 that fired first; only surfaced once the
+#    application became active. Scan for any lowercase two-letter country code literal that would
+#    trip the same validation (default param values and inline query strings alike).
+$setupBody = Get-Content "$PSScriptRoot\..\skill\bin\setup-bank.ps1" -Raw
+$lowerCountryHits = [regex]::Matches($setupBody, "(?:country=|Country\s*=\s*')([a-z]{2})(?:['&\s])")
+Assert ($lowerCountryHits.Count -eq 0) "setup-bank.ps1 must not contain a lowercase 2-letter country code (Enable Banking requires ^[A-Z]{2}$, got: $($lowerCountryHits | ForEach-Object { $_.Groups[1].Value }))"
+
+# 8. This codebase must NEVER call the payment-initiation side of this API in actual code (Safety
 #    rule 1: Jarvis never initiates transfers/payments). Comments are allowed to explain the
 #    guarantee (as this file's own header does) - only executable lines are checked.
 foreach ($f in @("$PSScriptRoot\..\skill\bin\get-bank-data.ps1", "$PSScriptRoot\..\skill\bin\setup-bank.ps1")) {
@@ -129,7 +138,7 @@ foreach ($f in @("$PSScriptRoot\..\skill\bin\get-bank-data.ps1", "$PSScriptRoot\
   Assert (-not (($codeLines -join "`n") -match '/payments')) "$(Split-Path $f -Leaf) must never call the /payments endpoint in code (read-only guarantee)"
 }
 
-# 8. Repo battle scar: new .ps1 files must be pure ASCII.
+# 9. Repo battle scar: new .ps1 files must be pure ASCII.
 foreach ($f in @("$PSScriptRoot\..\skill\bin\get-bank-data.ps1", "$PSScriptRoot\..\skill\bin\setup-bank.ps1")) {
   Assert (Test-Path $f) "$f must exist"
   $bytes = [IO.File]::ReadAllBytes($f)
