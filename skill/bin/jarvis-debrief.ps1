@@ -55,9 +55,16 @@ try {
   # "run ok" with a success toast — a silent miss of the actual deliverable. (Safety: the sender's
   # own Safety-rule-2 guard locks the recipient to the owner.)
   . $sender -DotSourceOnly
-  Send-Debrief -NotePath $note -ToAddress $OwnerEmail
-  Toast "Debrief ready, Sir."
-  "$([datetime]::Now.ToString('s')) run ok (note written $((Get-Item $note).LastWriteTime.ToString('t')))" | Add-Content $log
+  # Honesty stamp (design 8): a late catch-up names itself and its cause in the note, the email
+  # subject, and the log - it must never masquerade as an on-time morning. Boot time after 08:30
+  # proves the machine was powered off (shutdown defeats the wake timer - witnessed 2026-07-14).
+  $boot = (Get-CimInstance Win32_OperatingSystem).LastBootUpTime
+  $lateNote = Get-LatenessNote -RunStart $runStart -BootTime $boot
+  if ($lateNote) { Add-Content -Encoding UTF8 -Path $note -Value "`n> $lateNote" }
+  Send-Debrief -NotePath $note -ToAddress $OwnerEmail -RunStart $runStart -BootTime $boot
+  if ($lateNote) { Toast "Debrief ready (late catch-up), Sir." } else { Toast "Debrief ready, Sir." }
+  $lateTag = ''; if ($lateNote) { $lateTag = ' [late catch-up]' }
+  "$([datetime]::Now.ToString('s')) run ok (note written $((Get-Item $note).LastWriteTime.ToString('t')))$lateTag" | Add-Content $log
 } catch {
   $err = $_.Exception.Message
   "$([datetime]::Now.ToString('s')) run FAILED: $err" | Add-Content $log
