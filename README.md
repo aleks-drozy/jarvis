@@ -53,6 +53,14 @@ Agents that act unattended need rules they cannot talk themselves out of:
 - **Privacy:** the inbox reader records sender + subject only, never message bodies; sensitive
   categories are suppressed.
 
+## Phase 3 (scaffolded): read-only bank feed
+
+The finance module can read real balances via GoCardless Bank Account Data (PSD2 AISP - the
+product has no payment scope, so it is read-only by construction, not by promise). The collector
+emits aggregates only: masked IBAN, balance, 30-day money in/out. One consent click (mine, in my
+own browser - the agent is not allowed to do it) activates it; consents expire ~90 days. Off by
+default until then.
+
 ## Voice in, voice out
 
 Press `Ctrl+Shift+Space` anywhere: the desktop orb turns amber and listens, auto-stops after
@@ -83,6 +91,10 @@ scripts in `tests/` (no framework dependency).
   unplugged. Both battery conditions are now stripped by `scripts/register-task.ps1`.
 - whisper.cpp's release zip still ships `main.exe` - as a deprecation stub that exits 1. The
   code looks only for `whisper-cli.exe`.
+- WakeToRun "fixed" the 08:30 briefing and worked exactly once. Night two the laptop was shut
+  down, not slept - no wake timer survives a shutdown. Instead of pretending, a late briefing now
+  stamps itself: subject "(late 10:04)", note footer naming the cause (powered off vs asleep,
+  derived from the boot time). A miss is allowed; a quiet miss is not.
 
 ## Layout
 
