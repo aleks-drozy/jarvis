@@ -95,32 +95,65 @@ async function loadJobs() {
     : 'No applications tracked yet, Sir.';
 }
 
-async function loadLive() {
-  try {
-    const s = await window.jarvis.liveStatus();
-    if (s.lastRun) {
-      const d = new Date(s.lastRun);
-      const today = new Date().toDateString() === d.toDateString();
-      $('lastRun').textContent = isNaN(d) ? s.lastRun
-        : (today ? 'today ' : d.toLocaleDateString('en-IE', { day: 'numeric', month: 'short' }) + ' ')
-          + d.toLocaleTimeString('en-IE', { hour: '2-digit', minute: '2-digit' });
-    } else $('lastRun').textContent = 'never';
-    const ok = $('lastRunOk');
-    ok.textContent = s.lastRunOk === null ? '-' : (s.lastRunOk ? 'OK' : 'FAILED');
-    ok.className = s.lastRunOk === null ? '' : (s.lastRunOk ? 'ok' : 'bad');
-    $('activeSessions').textContent = s.activeSessions;
-  } catch {}
+function fmtStamp(iso) {
+  if (!iso) return '–';
+  const d = new Date(iso);
+  if (isNaN(d)) return iso;
+  const today = new Date().toDateString() === d.toDateString();
+  const t = d.toLocaleTimeString('en-IE', { hour: '2-digit', minute: '2-digit' });
+  return (today ? 'today ' : d.toLocaleDateString('en-IE', { day: 'numeric', month: 'short' }) + ' ') + t;
+}
+function daysLeft(dateStr) {
+  if (!dateStr) return null;
+  const exp = Date.parse(dateStr + 'T00:00:00');
+  if (isNaN(exp)) return null;
+  const now = new Date();
+  const midnight = new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime();
+  return Math.floor((exp - midnight) / 86400000);
+}
+const PILL = { busy:['Working…','busy'], grey:['Off duty','grey'], amber:['Attention','amber'], unknown:['Status unknown','unknown'], normal:['On duty','normal'] };
+
+function renderLive(s) {
+  if (!s) return;
+  const [label, cls] = PILL[s.health] || PILL.normal;
+  const pill = $('jarvisPill'); pill.className = 'pill ' + cls; $('pillLabel').textContent = label;
+
+  const sc = s.scheduler || {};
+  $('nextRun').textContent = fmtStamp(sc.nextRun);
+  let lr = fmtStamp(sc.lastRun);
+  if (sc.lastResult) lr += ' · ' + (sc.lastResult === 'ok' ? 'OK' : 'FAILED');
+  if (sc.lastRunLate) lr += ' (late — machine was shut at 08:30)';
+  $('lastRun').textContent = lr;
+
+  $('runningNow').textContent = (s.chat && s.chat.inFlight) ? 'answering you…'
+    : (sc.running ? 'debrief running…' : (sc.stalled ? 'a run may have stalled' : 'idle'));
+  $('runningNow').className = ((s.chat && s.chat.inFlight) || sc.running) ? 'live' : '';
+
+  const b = s.bank || {};
+  if (!b.enabled) $('bankFeed').textContent = 'off';
+  else if (!b.configured) $('bankFeed').textContent = 'awaiting first fetch';
+  else {
+    const dl = daysLeft(b.consentExpires);
+    let txt = b.ok ? ('fetched ' + fmtStamp(b.lastFetch)) : ('error — ' + (b.error || 'see log'));
+    if (dl !== null) txt += ' · consent ' + dl + 'd';
+    $('bankFeed').textContent = txt;
+    $('bankFeed').className = (b.ok === false || (dl !== null && dl < 7)) ? 'warn' : '';
+  }
+}
+async function loadLive() { renderLive(await window.jarvis.liveStatus()); await loadLedger(); }
+async function loadLedger() {
   const ledger = await window.jarvis.read('ledger');
   if (ledger) {
     const open = stripFrontmatter(ledger).split('\n').filter((l) => /\|\s*open\s*\|/.test(l));
     $('ledger').textContent = open.length ? open.map((l) => '- ' + l.split('|')[1].trim() + ' (raised ' + l.split('|')[3].trim() + 'x)').join('\n') : 'Nothing open. Remarkable, Sir.';
   }
 }
+window.jarvis.onLive(renderLive);
 
 function refreshAll() { loadToday(); loadJobs(); loadMoney(); loadLive(); }
 window.jarvis.onRefresh(refreshAll);
 refreshAll();
-setInterval(loadLive, 60000);
+setInterval(loadLive, 5 * 60 * 1000);
 
 // ---- chat ----
 const log = $('chatlog');

@@ -29,4 +29,5 @@ contextBridge.exposeInMainWorld('jarvis', {
   onHudHide: (cb) => ipcRenderer.on('hud:hide', () => cb()),
   onHudPlay: (cb) => ipcRenderer.on('hud:play', (_e, file) => cb(file)),
   onRefresh: (cb) => ipcRenderer.on('data:refresh', () => cb()),
+  onLive: (cb) => ipcRenderer.on('data:live', (_e, s) => cb(s)),
 });

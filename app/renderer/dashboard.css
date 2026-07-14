@@ -106,3 +106,16 @@ main { flex: 1; overflow: hidden; padding: 16px 22px 20px; }
   border-radius: 10px; padding: 0 20px; cursor: pointer; font-size: 13px;
 }
 .chatrow button:disabled { opacity: 0.4; cursor: default; }
+
+.pill { display:inline-flex; align-items:center; gap:.5em; padding:.3em .8em; border-radius:999px; font-weight:600; font-size:.9em; margin-bottom:.6em; }
+.pill .pdot { width:.6em; height:.6em; border-radius:50%; background:currentColor; }
+.pill.normal { color:#2ecc71; background:rgba(46,204,113,.12); }
+.pill.amber  { color:#f39c12; background:rgba(243,156,18,.14); }
+.pill.grey   { color:#95a5a6; background:rgba(149,165,166,.14); }
+.pill.busy   { color:#3498db; background:rgba(52,152,219,.14); }
+.pill.unknown{ color:#bbb;    background:rgba(200,200,200,.10); }
+#runningNow.live { color:#3498db; }
+#runningNow.live::after { content:''; display:inline-block; width:.5em; height:.5em; margin-left:.4em; border-radius:50%; background:#3498db; animation:pulse 1.4s ease-in-out infinite; }
+#bankFeed.warn { color:#f39c12; }
+@keyframes pulse { 0%,100%{opacity:.35;} 50%{opacity:1;} }
+@media (prefers-reduced-motion: reduce) { #runningNow.live::after { animation:none; } }
