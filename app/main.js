@@ -40,10 +40,20 @@ function pushLive() {
   pushTimer = setTimeout(() => {
     liveState.health = LS.deriveHealth(liveState, new Date());
     if (dashboard && !dashboard.isDestroyed()) dashboard.webContents.send('data:live', liveState);
-    updateTrayHealth();   // implemented in Task 8; safe no-op stub until then
+    updateTrayHealth();
   }, 250);
 }
-function updateTrayHealth() { /* Task 8 */ }
+let lastTrayIcon = null;
+function updateTrayHealth() {
+  if (!tray || tray.isDestroyed()) return;
+  const now = new Date();
+  const iconName = LS.chooseTrayIcon(liveState.health);
+  if (iconName !== lastTrayIcon) {
+    const p = path.join(__dirname, 'assets', iconName + '.png');
+    try { if (fs.existsSync(p)) { tray.setImage(nativeImage.createFromPath(p)); lastTrayIcon = iconName; } } catch {}
+  }
+  try { tray.setToolTip(LS.tooltipFor(liveState, now)); } catch {}
+}
 
 function loadState() {
   try { return JSON.parse(fs.readFileSync(APP_CONFIG, 'utf8')); }
