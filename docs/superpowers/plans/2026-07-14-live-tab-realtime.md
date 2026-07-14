@@ -921,9 +921,6 @@ function renderLive(s) {
     $('bankFeed').textContent = txt;
     $('bankFeed').className = (b.ok === false || (dl !== null && dl < 7)) ? 'warn' : '';
   }
-
-  const led = $('ledger');
-  if (led && typeof s.ledgerOpenCount === 'number') { /* ledger list still loaded separately below */ }
 }
 async function loadLive() { renderLive(await window.jarvis.liveStatus()); await loadLedger(); }
 async function loadLedger() {
@@ -1009,6 +1006,6 @@ git push origin master
 
 **Spec coverage:** §3 architecture → Task 7 (liveState/pushLive). §4 shape → Task 7 Step 2. §5.1 log → Tasks 1,7. §5.2 chat → Task 7 Step 6. §5.3 scheduler → Tasks 3,7. §5.4 heartbeat+consent → Tasks 4,5. §5.5 config → Task 7 Step 3. §6 tray → Tasks 2,6,8. §7 dashboard → Task 9. §8 failure handling → degradation tests (Tasks 3–5), stalled (Tasks 1–2), debounce/try-catch (Task 7), invariants (Task 10 Step 3). §9 testing → every task's tests + Task 10. §10 files → all covered. §12 deferred → not implemented (correct).
 
-**Placeholder scan:** no TBD/TODO; every code step shows complete code; the one "/* ledger loaded separately */" comment in Task 9 Step 3 is intentional (ledger list is filled by `loadLedger()` in the same step).
+**Placeholder scan:** no TBD/TODO; every code step shows complete code. `renderLive` handles only the Status card; the ledger list is filled by `loadLedger()`, called from `loadLive()` in the same step.
 
 **Type consistency:** `liveState` shape identical across Task 2 (interface), Task 7 Step 2 (declaration), Task 9 (consumption). `chooseTrayIcon` returns `tray-*` basenames used verbatim in Tasks 6 & 8. `parseLogTail` fields (`running/stalled/lastResult/lastRunLate/lastRun`) consistent across Tasks 1, 2, 7, 9.
