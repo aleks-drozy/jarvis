@@ -151,4 +151,20 @@ foreach ($f in @("$PSScriptRoot\..\skill\bin\get-bank-data.ps1", "$PSScriptRoot\
 Assert ((Get-ConsentDate -ValidUntil '2026-10-12T16:00:00Z') -eq '2026-10-12') "Get-ConsentDate strips the time"
 Assert ($null -eq (Get-ConsentDate -ValidUntil '')) "empty valid_until -> null"
 
+# 11. Heartbeat: Write-BankHeartbeat writes the expected shape, and a bad path must NOT throw (best-effort).
+. "$PSScriptRoot\..\skill\bin\get-bank-data.ps1" -DotSourceOnly
+$hb = Join-Path $env:TEMP ('jarvis-hb-' + [Guid]::NewGuid().ToString('N') + '.json')
+Write-BankHeartbeat -Path $hb -Ok $true -ErrorMsg $null -AccountCount 2 -ConsentExpires '2026-10-12'
+Assert (Test-Path $hb) "heartbeat file must be written"
+$h = Get-Content $hb -Raw | ConvertFrom-Json
+Assert ($h.ok -eq $true) "heartbeat ok flows through"
+Assert ($h.accountCount -eq 2) "heartbeat accountCount flows through"
+Assert ($h.consentExpires -eq '2026-10-12') "heartbeat consentExpires flows through"
+Assert ($h.asOf) "heartbeat stamps asOf"
+Remove-Item $hb -Force -ErrorAction SilentlyContinue
+$threw = $false
+try { Write-BankHeartbeat -Path 'Z:\no\such\dir\hb.json' -Ok $false -ErrorMsg 'x' -AccountCount 0 -ConsentExpires $null }
+catch { $threw = $true }
+Assert (-not $threw) "a heartbeat write to a bad path must NOT throw (best-effort)"
+
 Write-Host "get-bank-data: ALL PASS"

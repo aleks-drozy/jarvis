@@ -21,6 +21,7 @@
 param(
   [string]$CredPath  = (Join-Path $HOME '.jarvis\enablebanking.cred.xml'),
   [string]$StatePath = (Join-Path $HOME '.jarvis\bank.json'),
+  [string]$HeartbeatPath = (Join-Path $HOME '.jarvis\bank-heartbeat.json'),
   [int]$DaysBack = 30,
   [switch]$DotSourceOnly
 )
@@ -134,6 +135,17 @@ function Format-BankSummary {
   }
 }
 
+function Write-BankHeartbeat {
+  # Best-effort: a heartbeat write must NEVER affect the feed's stdout JSON or exit-0 contract.
+  param([string]$Path, [bool]$Ok, [string]$ErrorMsg, [int]$AccountCount, [string]$ConsentExpires)
+  try {
+    [pscustomobject]@{
+      asOf = (Get-Date).ToString('s'); ok = $Ok; error = $ErrorMsg
+      accountCount = $AccountCount; consentExpires = $ConsentExpires
+    } | ConvertTo-Json -Compress | Set-Content -Encoding UTF8 $Path
+  } catch { }
+}
+
 if ($DotSourceOnly) { return }
 
 try {
@@ -168,6 +180,7 @@ try {
     $data += @{ Name = $nm; Iban = $iban; Currency = $acc.currency; Balances = $bal; Transactions = $tx }
   }
   $sum = Format-BankSummary $data
+  Write-BankHeartbeat -Path $HeartbeatPath -Ok $true -ErrorMsg $null -AccountCount (@($sum.accounts).Count) -ConsentExpires $state.consent_expires
   [pscustomobject]@{
     configured = $true
     asOf = (Get-Date).ToString('s')
@@ -181,6 +194,7 @@ try {
   if ($msg -match '401|403|Unauthorized|Forbidden') {
     $hint = 'JWT/consent invalid or expired (PSD2 consents last ~90 days) - run setup-bank.ps1 -NewSession'
   }
+  Write-BankHeartbeat -Path $HeartbeatPath -Ok $false -ErrorMsg $msg -AccountCount 0 -ConsentExpires $null
   # exit 0 on purpose: a broken bank feed must degrade the finance module, not kill the debrief
   [pscustomobject]@{ configured = $true; error = $msg; hint = $hint } | ConvertTo-Json -Depth 4
   exit 0
