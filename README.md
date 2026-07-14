@@ -55,11 +55,16 @@ Agents that act unattended need rules they cannot talk themselves out of:
 
 ## Phase 3 (scaffolded): read-only bank feed
 
-The finance module can read real balances via GoCardless Bank Account Data (PSD2 AISP - the
-product has no payment scope, so it is read-only by construction, not by promise). The collector
-emits aggregates only: masked IBAN, balance, 30-day money in/out. One consent click (mine, in my
-own browser - the agent is not allowed to do it) activates it; consents expire ~90 days. Off by
-default until then.
+The finance module can read real balances via Enable Banking (PSD2 AIS - this build calls only the
+account-information side of the API; a payment-initiation endpoint exists on the same API and is
+never referenced anywhere in this codebase, enforced by a test). The collector emits aggregates
+only: masked IBAN, balance, 30-day money in/out. Auth is an RS256 JWT signed with a locally
+generated key that never leaves this machine - only the public certificate is uploaded. One
+certificate registration + one consent click (mine, in my own browser - the agent is not allowed to
+do either) activates it; consents expire ~90 days. Off by default until then.
+
+(First scaffolded against GoCardless Bank Account Data, same day - turned out GoCardless closed
+that product to new signups in mid-2025. Rebuilt against Enable Banking within the hour.)
 
 ## Voice in, voice out
 
@@ -95,6 +100,14 @@ scripts in `tests/` (no framework dependency).
   down, not slept - no wake timer survives a shutdown. Instead of pretending, a late briefing now
   stamps itself: subject "(late 10:04)", note footer naming the cause (powered off vs asleep,
   derived from the boot time). A miss is allowed; a quiet miss is not.
+- GoCardless Bank Account Data - the vendor Phase 3 was built against - turned out to have quietly
+  closed to new signups a year earlier. The product page still looks alive; only a specific "new
+  signups disabled" URL admits it. Rebuilt the whole read-only feed against Enable Banking the same
+  day. Separately: openssl's normal stderr chatter ("writing RSA key") gets wrapped into a
+  terminating PowerShell error under `$ErrorActionPreference='Stop'` for some subcommands (`rsa
+  -pubout`) but not others (`genrsa`, `req -x509`, `dgst -sign`) - no obvious pattern found, so the
+  code and tests simply avoid the subcommand that trips it rather than fighting PowerShell's native
+  command error-wrapping further.
 
 ## Layout
 
