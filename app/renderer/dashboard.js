@@ -130,8 +130,8 @@ function renderLive(s) {
   $('runningNow').className = ((s.chat && s.chat.inFlight) || sc.running) ? 'live' : '';
 
   const b = s.bank || {};
-  if (!b.enabled) $('bankFeed').textContent = 'off';
-  else if (!b.configured) $('bankFeed').textContent = 'awaiting first fetch';
+  if (!b.enabled) { $('bankFeed').textContent = 'off'; $('bankFeed').className = ''; }
+  else if (!b.configured) { $('bankFeed').textContent = 'awaiting first fetch'; $('bankFeed').className = ''; }
   else {
     const dl = daysLeft(b.consentExpires);
     let txt = b.ok ? ('fetched ' + fmtStamp(b.lastFetch)) : ('error — ' + (b.error || 'see log'));

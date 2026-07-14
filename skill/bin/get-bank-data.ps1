@@ -194,7 +194,10 @@ try {
   if ($msg -match '401|403|Unauthorized|Forbidden') {
     $hint = 'JWT/consent invalid or expired (PSD2 consents last ~90 days) - run setup-bank.ps1 -NewSession'
   }
-  Write-BankHeartbeat -Path $HeartbeatPath -Ok $false -ErrorMsg $msg -AccountCount 0 -ConsentExpires $null
+  # $state may not be bound if the failure happened before the state file was read; keep the
+  # consent countdown alive on error paths too (it is most needed right when 401s start).
+  $ce = $null; try { if ($state -and $state.consent_expires) { $ce = $state.consent_expires } } catch {}
+  Write-BankHeartbeat -Path $HeartbeatPath -Ok $false -ErrorMsg $msg -AccountCount 0 -ConsentExpires $ce
   # exit 0 on purpose: a broken bank feed must degrade the finance module, not kill the debrief
   [pscustomobject]@{ configured = $true; error = $msg; hint = $hint } | ConvertTo-Json -Depth 4
   exit 0

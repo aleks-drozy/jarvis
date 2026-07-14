@@ -68,7 +68,9 @@ function readBankEnabled() {
 function refreshBank() {
   liveState.bank.enabled = readBankEnabled();
   try {
-    const h = JSON.parse(fs.readFileSync(BANK_HEARTBEAT, 'utf8'));
+    // PS 5.1's Set-Content -Encoding UTF8 writes a UTF-8 BOM (EF BB BF); Node's 'utf8' read preserves
+    // it as a leading U+FEFF, which JSON.parse rejects ("Unexpected token"). Strip it before parsing.
+    const h = JSON.parse(fs.readFileSync(BANK_HEARTBEAT, 'utf8').replace(/^﻿/, ''));
     liveState.bank.configured = true;
     liveState.bank.ok = !!h.ok;
     liveState.bank.error = h.error || null;
@@ -415,7 +417,7 @@ else {
     startWatchers();
     refreshBank();
     pollScheduler();
-    setInterval(pollScheduler, 5 * 60 * 1000);
+    setInterval(() => { pollScheduler(); refreshSchedulerFromLog(); refreshBank(); }, 5 * 60 * 1000);
     try {
       fs.watch(path.dirname(BANK_HEARTBEAT), (_e, f) => { if (f === 'bank-heartbeat.json') refreshBank(); });
     } catch (e) { console.error('bank-heartbeat watch failed:', e.message); }
