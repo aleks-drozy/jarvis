@@ -9,6 +9,7 @@
   "author": "Aleksandrs Drozdovs",
   "license": "MIT",
   "devDependencies": {
-    "electron": "^43.1.0"
+    "electron": "^43.1.0",
+    "pngjs": "^7.0.0"
   }
 }
