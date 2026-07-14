@@ -9,7 +9,7 @@
 #     -> writes a private key (kept local, never uploaded) + a public certificate (upload this one)
 #   setup-bank.ps1 -StoreCredential -ApplicationId <uuid>
 #     -> <uuid> is shown by the Enable Banking control panel after you upload the certificate
-#   setup-bank.ps1 -ListBanks [-Country ie]
+#   setup-bank.ps1 -ListBanks [-Country IE]
 #   setup-bank.ps1 -NewSession -AspspName "Revolut" -AspspCountry IE
 #     -> prints the consent link; open it, approve at your bank
 #   setup-bank.ps1 -ExchangeCode -Code <code> -State <state>
@@ -18,7 +18,7 @@
 param(
   [switch]$GenerateKeypair,
   [switch]$StoreCredential, [string]$ApplicationId,
-  [switch]$ListBanks, [string]$Country = 'ie',
+  [switch]$ListBanks, [string]$Country = 'IE',
   [switch]$NewSession, [string]$AspspName, [string]$AspspCountry = 'IE', [int]$ValidDays = 90,
   [string]$RedirectUrl = 'https://localhost/jarvis-bank-consent-done',
   [switch]$ExchangeCode, [string]$Code, [string]$State,
@@ -69,7 +69,10 @@ if ($StoreCredential) {
   Write-Host 'Secrets never go in the repo or the vault (Safety rule 6).'
   try {
     $jwt = New-EnableBankingJwt -ApplicationId $ApplicationId -PrivateKeyPem $pem
-    $null = Invoke-EBApi $jwt -Path "/aspsps?country=ie"
+    # country MUST be uppercase - Enable Banking validates against ^[A-Z]{2}$ and 422s on 'ie'
+    # (confirmed live 2026-07-14: this bug was masked until the app became active, since the
+    # earlier "application not active" 403 fired before parameter validation got a chance to).
+    $null = Invoke-EBApi $jwt -Path "/aspsps?country=IE"
     Write-Host 'Auth check: OK. Removing the plaintext key file now that it is DPAPI-stored.'
     Remove-Item $privPath -Force -ErrorAction SilentlyContinue
     Write-Host 'Next: -ListBanks, then -NewSession.'
