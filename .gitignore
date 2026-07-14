@@ -9,3 +9,4 @@ app/app-config.json
 app/package-lock.json
 app/chat-timing.log
 app/vendor/
+.superpowers/
