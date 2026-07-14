@@ -38,7 +38,7 @@ All vault paths below are absolute (the Bash/Read tools run from the Desktop cwd
 - **🏋️ Life & discipline:** one line each on physical / mental / learning vs the charter goals.
   **Per CONFIG `ignores` (2026-07-09): do NOT raise roadmap phases or weekly reviews** — the module
   is coaching (fitness load, recovery, habits, learning), not roadmap admin.
-- **💰 Finance:** read `C:\Users\Alex\ObsidianVault\claude-memory\12-jarvis\FINANCE.md` (Snapshot + Budget per `references/finance-coach.md`); report Thailand pace (ahead/behind), weekly allowance, one nudge. If the snapshot is empty or >30 days old, ask for fresh numbers. Never a transaction.
+- **💰 Finance:** if CONFIG `finance_bank: on`, FIRST run `powershell -NoProfile -File C:\Users\Alex\.claude\skills\jarvis\bin\get-bank-data.ps1` via Bash; when `configured:true`, lead with the real balance ("bank feed, as of HH:MM"), flag drift vs the FINANCE.md Snapshot over EUR 20, use last-30d moneyOut for pace. Aggregates only — never write transaction lines or full IBANs into any note. On off/unconfigured/error degrade silently. Then read `C:\Users\Alex\ObsidianVault\claude-memory\12-jarvis\FINANCE.md` (Snapshot + Budget per `references/finance-coach.md`); report Thailand pace (ahead/behind), weekly allowance, one nudge. If the snapshot is empty or >30 days old, ask for fresh numbers. Never a transaction.
 - **💡 Suggestion:** from today's project/job activity + charter goals, one concrete idea (bias toward portfolio projects that get noticed by Dublin AI/SWE employers).
 
 ## Output template

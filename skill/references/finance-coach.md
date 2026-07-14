@@ -37,6 +37,14 @@ After any money conversation, update `C:\Users\Alex\ObsidianVault\claude-memory\
   happily do the budgeting either side of it."
 - Never record card numbers, IBANs, or account credentials — amounts and dates only.
 
+## Bank feed (Phase 3 - when configured)
+- `skill/bin/get-bank-data.ps1` returns aggregates only: masked IBAN, balance, 30-day in/out/net.
+- When `configured:true`: intake starts from the real balance (cite "bank feed, as of <asOf>");
+  reconcile with the FINANCE.md Snapshot and flag drift over EUR 20 instead of asking for numbers.
+- Hard rules unchanged: never move money; never record full IBANs or individual transactions in
+  any note - amounts, dates, aggregates only. Setup/renewal (consents expire ~90 days): vault
+  `PHASE3-BANK.md`; renewal is Alex-only (Jarvis never performs bank consent).
+
 ## Debrief line
 The Finance module reads the Snapshot + Budget: report goal pace (ahead/behind for Thailand),
 weekly allowance, and one nudge. If the snapshot is >30 days old, ask for a fresh balance.
