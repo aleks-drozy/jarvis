@@ -14,6 +14,9 @@ const { runPowerShell, runCollector } = require('./lib/run');
 const { speak } = require('./lib/voice');
 const { sendChat, prewarm } = require('./lib/chat');
 const { transcribe, sttAvailable, sttDiagnosis } = require('./lib/stt');
+const LS = require('./lib/livestate');
+const BANK_HEARTBEAT = path.join(process.env.USERPROFILE, '.jarvis', 'bank-heartbeat.json');
+const CONFIG_MD = path.join(VAULT, 'CONFIG.md');
 
 let tray = null;
 let dashboard = null;
@@ -23,11 +26,68 @@ let orb = null;
 let summon = null;
 let state = loadState();
 
+let liveState = {
+  scheduler: { registered: null, enabled: null, state: null, nextRun: null, lastRun: null, lastResult: null, lastRunLate: false, running: false, stalled: false },
+  bank: { enabled: false, configured: false, ok: null, error: null, lastFetch: null, consentExpires: null },
+  chat: { inFlight: false },
+  ledgerOpenCount: 0,
+  health: 'unknown',
+};
+let pushTimer = null;
+function pushLive() {
+  clearTimeout(pushTimer);
+  pushTimer = setTimeout(() => {
+    liveState.health = LS.deriveHealth(liveState, new Date());
+    if (dashboard && !dashboard.isDestroyed()) dashboard.webContents.send('data:live', liveState);
+    updateTrayHealth();   // implemented in Task 8; safe no-op stub until then
+  }, 250);
+}
+function updateTrayHealth() { /* Task 8 */ }
+
 function loadState() {
   try { return JSON.parse(fs.readFileSync(APP_CONFIG, 'utf8')); }
   catch { return { muted: false, voice: 'en-US-AndrewMultilingualNeural' }; }
 }
 function saveState() { try { fs.writeFileSync(APP_CONFIG, JSON.stringify(state, null, 2)); } catch {} }
+
+// ---------- live state feeders ----------
+function readBankEnabled() {
+  try { return /finance_bank:\s*on\b/.test(fs.readFileSync(CONFIG_MD, 'utf8')); } catch { return false; }
+}
+function refreshBank() {
+  liveState.bank.enabled = readBankEnabled();
+  try {
+    const h = JSON.parse(fs.readFileSync(BANK_HEARTBEAT, 'utf8'));
+    liveState.bank.configured = true;
+    liveState.bank.ok = !!h.ok;
+    liveState.bank.error = h.error || null;
+    liveState.bank.lastFetch = h.asOf || null;
+    liveState.bank.consentExpires = h.consentExpires || null;
+  } catch {
+    liveState.bank.configured = false;
+    liveState.bank.ok = null; liveState.bank.error = null; liveState.bank.lastFetch = null; liveState.bank.consentExpires = null;
+  }
+  pushLive();
+}
+
+async function pollScheduler() {
+  try {
+    const s = await runCollector(path.join(BIN, 'scheduler-status.ps1'), []);
+    liveState.scheduler.registered = (s && typeof s.registered === 'boolean') ? s.registered : null;
+    liveState.scheduler.enabled = (s && typeof s.enabled === 'boolean') ? s.enabled : null;
+    liveState.scheduler.state = (s && s.state) || null;
+    liveState.scheduler.nextRun = (s && s.nextRun) || null;
+  } catch {
+    liveState.scheduler.registered = null; liveState.scheduler.enabled = null;
+  }
+  pushLive();
+}
+
+async function sendChatTracked(message) {
+  liveState.chat.inFlight = true; pushLive();
+  try { return await sendChat(message); }
+  finally { liveState.chat.inFlight = false; pushLive(); }
+}
 
 // ---------- tray ----------
 function todayNotePath() {
@@ -222,7 +282,7 @@ async function handleSpeech(wavBuf) {
     }
     showHud('“' + text + '”', { speak: false, holdMs: 5000 });
     toSummon({ stage: 'transcript', text });
-    const res = await sendChat(text);
+    const res = await sendChatTracked(text);
     // chips on screen, natural sentence aloud
     showHud(res.text, { kind: res.ok ? 'info' : 'alert', holdMs: 9000, say: res.say });
     toSummon({ stage: 'reply', text: res.text, ok: res.ok });
@@ -233,6 +293,15 @@ async function handleSpeech(wavBuf) {
 }
 
 // ---------- watchers ----------
+function refreshSchedulerFromLog() {
+  try {
+    const logPath = path.join(VAULT, 'debriefs', '.jarvis.log');
+    const lines = fs.readFileSync(logPath, 'utf8').trim().split('\n').slice(-10);
+    Object.assign(liveState.scheduler, LS.parseLogTail(lines, new Date()));
+  } catch {}
+  pushLive();
+}
+
 function startWatchers() {
   const debriefDir = path.join(VAULT, 'debriefs');
   let lastNoteMtime = 0;
@@ -260,9 +329,12 @@ function startWatchers() {
         const tail = fs.readFileSync(log, 'utf8').slice(lastSize);
         lastSize = size;
         if (/FAILED/i.test(tail)) showHud('A scheduled run failed, Sir. The log has details.', { kind: 'alert' });
+        refreshSchedulerFromLog();
+        if (/run (ok|FAILED)/.test(tail)) pollScheduler();
       } else lastSize = size;
     } catch {}
   });
+  refreshSchedulerFromLog();
 }
 
 // ---------- IPC ----------
@@ -285,28 +357,14 @@ function registerIpc() {
   ipcMain.handle('collector:inbox', () => runCollector(path.join(BIN, 'check-job-mail.ps1'), ['-Mode', 'inbox', '-SinceHours', '24']));
   ipcMain.handle('collector:activity', () => runCollector(path.join(BIN, 'collect-activity.ps1'), ['-SinceHours', '24']));
   ipcMain.handle('live:status', () => {
-    const out = { lastRun: null, lastRunOk: null, activeSessions: 0 };
     try {
-      const log = fs.readFileSync(path.join(VAULT, 'debriefs', '.jarvis.log'), 'utf8').trim().split('\n');
-      const last = log[log.length - 1] || '';
-      out.lastRun = last.slice(0, 19); out.lastRunOk = /run ok/.test(last);
+      const ledger = fs.readFileSync(path.join(VAULT, 'LEDGER.md'), 'utf8');
+      liveState.ledgerOpenCount = (ledger.match(/\|\s*open\s*\|/g) || []).length;
     } catch {}
-    try {
-      const projRoot = path.join(process.env.USERPROFILE, '.claude', 'projects');
-      const cutoff = Date.now() - 30 * 60 * 1000;
-      const walk = (dir, depth) => {
-        if (depth > 2) return;
-        for (const f of fs.readdirSync(dir, { withFileTypes: true })) {
-          const p = path.join(dir, f.name);
-          if (f.isDirectory()) walk(p, depth + 1);
-          else if (f.name.endsWith('.jsonl') && fs.statSync(p).mtimeMs > cutoff) out.activeSessions++;
-        }
-      };
-      walk(projRoot, 0);
-    } catch {}
-    return out;
+    liveState.health = LS.deriveHealth(liveState, new Date());
+    return liveState;
   });
-  ipcMain.handle('chat:send', async (_ev, message) => sendChat(message));
+  ipcMain.handle('chat:send', async (_ev, message) => sendChatTracked(message));
   ipcMain.handle('voice:speak', async (_ev, text) => state.muted ? null : speak(text, state.voice));
   ipcMain.handle('app:state', () => state);
   ipcMain.handle('app:setVoice', (_ev, v) => { state.voice = v; saveState(); return state; });
@@ -340,6 +398,12 @@ else {
     createOrb();
     registerIpc();
     startWatchers();
+    refreshBank();
+    pollScheduler();
+    setInterval(pollScheduler, 5 * 60 * 1000);
+    try {
+      fs.watch(path.dirname(BANK_HEARTBEAT), (_e, f) => { if (f === 'bank-heartbeat.json') refreshBank(); });
+    } catch (e) { console.error('bank-heartbeat watch failed:', e.message); }
     if (!globalShortcut.register('Control+Shift+J', toggleSummon)) {
       console.error('summon hotkey registration failed');
     }
