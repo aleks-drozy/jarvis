@@ -134,7 +134,11 @@
     const ratio = inRate / 16000, outLen = Math.floor(all.length / ratio);
     const pcm = new Int16Array(outLen);
     for (let i = 0; i < outLen; i++) {
-      const s = Math.max(-1, Math.min(1, all[Math.floor(i * ratio)]));
+      // average each output sample's source window (box filter) so >8 kHz content can't alias into speech
+      const a = Math.floor(i * ratio), b = Math.min(Math.ceil((i + 1) * ratio), all.length);
+      let sum = 0;
+      for (let j = a; j < b; j++) sum += all[j];
+      const s = Math.max(-1, Math.min(1, sum / (b - a)));
       pcm[i] = s < 0 ? s * 0x8000 : s * 0x7fff;
     }
     const buf = new ArrayBuffer(44 + pcm.length * 2);
