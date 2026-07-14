@@ -74,6 +74,12 @@ Assert ($payload.iss -eq 'enablebanking.com') "JWT payload iss must be enableban
 Assert ($payload.aud -eq 'api.enablebanking.com') "JWT payload aud must be api.enablebanking.com"
 Assert ($payload.exp -gt $payload.iat) "exp must be after iat"
 Assert (($payload.exp - $payload.iat) -le 86400) "TTL must not exceed Enable Banking's 24h max"
+# Regression: Get-Date -UFormat %s ignores the local UTC offset in Windows PowerShell 5.1, so on
+# any machine not at UTC+0 the old code stamped iat/exp into the future - Enable Banking rejected
+# every JWT with "JWT can not be issued in the future" (401), confirmed live 2026-07-14 on a UTC+1
+# machine (exactly a 3600s gap). This must hold regardless of the test machine's own timezone.
+$trueUtcNow = [DateTimeOffset]::UtcNow.ToUnixTimeSeconds()
+Assert ([Math]::Abs($payload.iat - $trueUtcNow) -le 5) "iat must be true UTC now (+/-5s), not skewed by local timezone offset (got iat=$($payload.iat), true UTC now=$trueUtcNow, diff=$($payload.iat - $trueUtcNow)s)"
 
 # Verify the signature actually validates against the public key derived from the same private key -
 # proves New-EnableBankingJwt signs what it claims to sign, not just that it produces JWT-shaped text.
