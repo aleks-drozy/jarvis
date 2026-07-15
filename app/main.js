@@ -147,12 +147,11 @@ function createOrb() {
     skipTaskbar: true, hasShadow: false, show: true,
     // backgroundThrottling:false - the orb owns audio playback AND mic capture; Chromium otherwise
     // suspends getUserMedia + throttles timers/rAF on a hidden/backgrounded window, which silently
-    // kills voice input when the orb is hidden (and would break always-listening wake-word mode).
+    // kills voice input when the orb is hidden.
     webPreferences: { preload: path.join(__dirname, 'preload.js'), contextIsolation: true, backgroundThrottling: false },
   });
   orb.loadFile(path.join(__dirname, 'renderer', 'orb.html'));
   orb.setAlwaysOnTop(true, 'screen-saver');
-  orb.webContents.on('did-finish-load', () => sendWakeConfig());   // arm wake word iff CONFIG says on
   if (state.orbHidden) orb.hide();   // hidden orb still plays audio (window lives, invisible)
 }
 function toggleOrb() {
@@ -164,20 +163,6 @@ function toggleOrb() {
 }
 function orbPlay(file) {
   if (orb && !orb.isDestroyed()) orb.webContents.send('audio:play', file);
-}
-
-// wake word ("Jarvis"): off by default. Only when CONFIG wake_word:on do we spend a PowerShell call to
-// decrypt the Picovoice AccessKey; otherwise the orb gets {enabled:false} and stays completely inert.
-function readWakeEnabled() {
-  try { return /wake_word:\s*on\b/.test(fs.readFileSync(CONFIG_MD, 'utf8')); } catch { return false; }
-}
-async function sendWakeConfig() {
-  const enabled = readWakeEnabled();
-  let accessKey = null;
-  if (enabled) {
-    try { const r = await runCollector(path.join(BIN, 'get-picovoice-key.ps1'), []); if (r && r.accessKey) accessKey = r.accessKey; } catch {}
-  }
-  if (orb && !orb.isDestroyed()) orb.webContents.send('wake:config', { enabled, accessKey });
 }
 
 // ---------- summon (full-screen HUD overlay) ----------
@@ -411,7 +396,6 @@ function registerIpc() {
     if (reason === 'denied') showHud('Microphone blocked, Sir - allow it in Windows privacy settings.', { kind: 'alert', speak: false });
     else if (!wasAuto) showHud('Never mind, Sir.', { speak: false, holdMs: 2200 });  // auto-arm cancels quietly
   });
-  ipcMain.on('wake:detected', () => startListen(true));   // orb heard "Jarvis" -> start a listen (auto)
   ipcMain.on('summon:typing', () => { if (listening && autoListen) cancelListen(); });
   ipcMain.on('hud:clicked', () => { if (hud && !hud.isDestroyed()) hud.hide(); toggleSummon(); });
   ipcMain.on('summon:toggle', () => toggleSummon());
