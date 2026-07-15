@@ -11,10 +11,5 @@
   "devDependencies": {
     "electron": "^43.1.0",
     "pngjs": "^7.0.0"
-  },
-    "_comment_wakeword": "@picovoice/* are needed ONLY for the wake word (CONFIG wake_word: on); vendor their browser builds into app/vendor/porcupine/ - see README.",
-  "optionalDependencies": {
-    "@picovoice/porcupine-web": "^3.0.0",
-    "@picovoice/web-voice-processor": "^4.0.0"
   }
 }
