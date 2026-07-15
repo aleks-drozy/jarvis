@@ -44,6 +44,7 @@ All vault paths below are absolute (the Bash/Read tools run from the Desktop cwd
   **Per CONFIG `ignores` (2026-07-09): do NOT raise roadmap phases or weekly reviews** — the module
   is coaching (fitness load, recovery, habits, learning), not roadmap admin.
 - **💰 Finance:** if CONFIG `finance_bank: on`, FIRST run `powershell -NoProfile -File C:\Users\Alex\.claude\skills\jarvis\bin\get-bank-data.ps1` via Bash; when `configured:true`, lead with the real balance ("bank feed, as of HH:MM"), flag drift vs the FINANCE.md Snapshot over EUR 20, use last-30d moneyOut for pace. Aggregates only — never write transaction lines or full IBANs into any note. On off/unconfigured/error degrade silently. Then read `C:\Users\Alex\ObsidianVault\claude-memory\12-jarvis\FINANCE.md` (Snapshot + Budget per `references/finance-coach.md`); report Thailand pace (ahead/behind), weekly allowance, one nudge. If the snapshot is empty or >30 days old, ask for fresh numbers. Never a transaction.
+- **📥 Captures:** read `C:\Users\Alex\ObsidianVault\claude-memory\12-jarvis\CAPTURE.md`; if there are recent notes Alex texted in via Telegram (last ~5, un-triaged), surface them near the top ("You jotted: …") and fold any actionable one into Today's Focus. Offer to triage each (→ a SUGGESTIONS idea, a job action, a task, or delete once handled). These are things he flagged on the go — treat as high-signal. Omit the line entirely if there are none.
 - **💡 Suggestion:** from today's project/job activity + charter goals, one concrete idea (bias toward portfolio projects that get noticed by Dublin AI/SWE employers).
 
 ## Output template
@@ -53,6 +54,7 @@ Good morning, Sir. — <YYYY-MM-DD>
 🎯 TODAY'S FOCUS
   1. <action>   2. <action>   3. <action>
 
+📥 Captures            <recent notes texted in via Telegram — or omit the line if none>
 🚧 Projects & agents  <commits (hash) since yesterday; stale repos; session activity — or "quiet">
 💼 Job search         <next application / follow-ups due / one LinkedIn move — or prompt to add targets>
 🏋️ Life & discipline  <phase; weekly-review status; physical/mental/learning one-liners>

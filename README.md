@@ -87,7 +87,8 @@ or hold tokens, so activation is a manual step.
 **Telegram remote.** A self-only bridge (`skill/bin/telegram-bot.ps1`) to trigger a debrief or check
 status from my phone, and to push application-status alerts (interview / offer / rejection, classified
 from the subject line only). It talks to exactly one chat id - mine - and the remote surface is
-deliberately narrow (`/debrief`, `/status`); it is not a shell. To enable:
+deliberately narrow (`/debrief`, `/status`, `note <text>` to jot something down on the go, `/notes` to
+read them back); it is not a shell - a texted note is stored as data in the vault, never executed. To enable:
 1. `@BotFather` -> `/newbot`, message the bot once, then `telegram-bot.ps1 -StoreCredential`
 2. Set `telegram: on` in CONFIG.md. Poll with `-Once` (Task Scheduler) or `-Poll` (foreground).
 

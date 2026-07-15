@@ -70,4 +70,21 @@ $hc = @(Split-TelegramText $long 20)
 Assert ((@($hc | Where-Object { $_.Length -gt 20 })).Count -eq 0) "over-long single line hard-split under cap"
 Assert (($hc -join '') -eq $long) "hard-split preserves the whole line"
 
+# --- note capture: text a note on the go. A note is DATA appended to a file, NEVER executed ---
+Assert ((Resolve-TelegramCommand 'note buy protein') -eq 'note') "note <text> -> note"
+Assert ((Resolve-TelegramCommand '/note buy protein') -eq 'note') "/note -> note"
+Assert ((Resolve-TelegramCommand 'idea: a tool for X') -eq 'note') "idea: -> note"
+Assert ((Resolve-TelegramCommand 'remember to call the recruiter') -eq 'note') "remember -> note"
+Assert ((Resolve-TelegramCommand 'note') -eq 'note') "bare note -> note (will prompt for text)"
+Assert ((Resolve-TelegramCommand '/notes') -eq 'notes') "/notes -> notes (read back)"
+Assert ((Resolve-TelegramCommand 'notes') -eq 'notes') "notes -> notes"
+Assert ((Resolve-TelegramCommand 'notebook shopping list') -eq 'help') "'notebook' must NOT trigger note"
+Assert ((Resolve-TelegramCommand 'delete all my files') -eq 'help') "arbitrary text still -> help (not captured, not executed)"
+# payload extraction strips the trigger word + optional punctuation, preserving the note's own casing
+Assert ((Get-NotePayload 'note buy Protein') -eq 'buy Protein') "note payload keeps case"
+Assert ((Get-NotePayload '/note: buy protein') -eq 'buy protein') "slash+colon payload"
+Assert ((Get-NotePayload 'idea a tool for X') -eq 'a tool for X') "idea payload"
+Assert ((Get-NotePayload 'remember to call mom') -eq 'to call mom') "remember payload"
+Assert ((Get-NotePayload 'note') -eq '') "bare note -> empty payload"
+
 Write-Host "telegram-bot: ALL PASS"

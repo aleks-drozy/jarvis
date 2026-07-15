@@ -40,11 +40,21 @@ function Resolve-TelegramCommand {
   param([string]$Text)
   if (-not $Text) { return 'help' }
   $t = $Text.Trim().ToLower() -replace '^/','' -replace '@\w+$',''   # strip a leading slash and @botname
+  if ($t -match '^notes$') { return 'notes' }                                   # read recent notes back
+  if ($t -match '^(note|log|idea|remember|todo|jot|capture)\b') { return 'note' } # capture the rest as a note
   switch -regex ($t) {
     '^(debrief|brief|briefing|what''?s my day|what should i do)$' { return 'debrief' }
     '^(status|health|how are you|ping)$'                          { return 'status' }
     default { return 'help' }
   }
+}
+
+function Get-NotePayload {
+  # Extract the note body from a capture message: strip a leading /note|note|log|idea|remember|todo|jot|
+  # capture and any following colon/comma/space. Preserves the note's original casing.
+  param([string]$Text)
+  if (-not $Text) { return '' }
+  return ($Text.Trim() -replace '^/?(?i)(note|log|idea|remember|todo|jot|capture)\b[:,\s]*', '').Trim()
 }
 
 function Test-TelegramSenderAllowed {
@@ -159,6 +169,26 @@ function Send-DebriefTelegram {
   foreach ($chunk in $parts) { Send-Telegram -Text $chunk -Cred $Cred | Out-Null }
 }
 
+function Save-Capture {
+  # Append a texted note to the vault capture file (12-jarvis - an allowed write target, Safety 7). The
+  # note is DATA: written literally via Add-Content, NEVER executed. Newlines are flattened to keep one
+  # note per line. Returns the note text.
+  param([string]$Text)
+  $f = Join-Path $VAULT 'CAPTURE.md'
+  $line = '- [' + (Get-Date).ToString('yyyy-MM-dd HH:mm') + '] ' + ($Text -replace '\r?\n', ' ')
+  Add-Content -Encoding UTF8 -Path $f -Value $line
+  return $Text
+}
+
+function Get-RecentCaptures {
+  param([int]$N = 10)
+  $f = Join-Path $VAULT 'CAPTURE.md'
+  if (-not (Test-Path $f)) { return '' }
+  $lines = @(Get-Content $f | Where-Object { $_ -match '^\s*- \[' })
+  if ($lines.Count -eq 0) { return '' }
+  return (($lines | Select-Object -Last $N) -join "`n")
+}
+
 function Get-TodayDebriefText {
   $iso = (Get-Date).ToString('yyyy-MM-dd')
   $p = Join-Path $VAULT ("debriefs\$iso.md")
@@ -189,7 +219,7 @@ function Get-StatusText {
 }
 
 function Invoke-TelegramCommand {
-  param([string]$Command, $Cred)
+  param([string]$Command, [string]$Text, $Cred)
   switch ($Command) {
     'debrief' {
       Send-Telegram -Text 'On it, Sir. Generating your debrief now - it will arrive here shortly.' -Cred $Cred | Out-Null
@@ -199,7 +229,16 @@ function Invoke-TelegramCommand {
       catch { Send-Telegram -Text "The debrief run failed, Sir: $($_.Exception.Message)" -Cred $Cred | Out-Null }
     }
     'status' { Send-Telegram -Text (Get-StatusText) -Cred $Cred | Out-Null }
-    default  { Send-Telegram -Text 'I take /debrief and /status here, Sir. For a full conversation, summon me on the desktop (Ctrl+Shift+J).' -Cred $Cred | Out-Null }
+    'note' {
+      $payload = Get-NotePayload $Text
+      if (-not $payload) { Send-Telegram -Text 'What should I note, Sir? e.g. "note buy protein".' -Cred $Cred | Out-Null }
+      else { $null = Save-Capture $payload; Send-Telegram -Text "Noted, Sir: $payload" -Cred $Cred | Out-Null }
+    }
+    'notes' {
+      $recent = Get-RecentCaptures 10
+      Send-Telegram -Text $(if ($recent) { "Recent notes, Sir:`n$recent" } else { 'No notes captured yet, Sir.' }) -Cred $Cred | Out-Null
+    }
+    default  { Send-Telegram -Text 'I take: /debrief, /status, "note <text>" to jot something down, and /notes to read them back, Sir. Full conversation is on the desktop (Ctrl+Shift+J).' -Cred $Cred | Out-Null }
   }
 }
 
@@ -218,7 +257,7 @@ function Invoke-PollOnce {
     if (Test-TelegramSenderAllowed $u.ChatId $Cred.ChatId) {
       # A failed command must NOT abort the batch: an escaping throw would skip Write-Offset and make
       # the next poll replay the whole batch (duplicate debriefs/emails). Catch and drop; never retry.
-      try { Invoke-TelegramCommand -Command (Resolve-TelegramCommand $u.Text) -Cred $Cred }
+      try { Invoke-TelegramCommand -Command (Resolve-TelegramCommand $u.Text) -Text $u.Text -Cred $Cred }
       catch { Write-Warning "command failed (dropped, not retried): $($_.Exception.Message)" }
     }   # messages from any other chat id are silently ignored (self-only)
   }
