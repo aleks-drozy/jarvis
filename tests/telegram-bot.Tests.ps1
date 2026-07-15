@@ -1,0 +1,59 @@
+# tests/telegram-bot.Tests.ps1 - pure routing/parsing/safety logic for the Telegram bridge. NO network:
+# dot-sources telegram-bot.ps1 and exercises the helpers. The self-only lock is the security-critical bit.
+$ErrorActionPreference = 'Stop'
+. "$PSScriptRoot\..\skill\bin\telegram-bot.ps1" -DotSourceOnly
+function Assert($c,$m){ if(-not $c){ Write-Error "FAIL: $m"; exit 1 } }
+
+# --- Resolve-TelegramCommand: only a small whitelist maps to actions; everything else is help ---
+Assert ((Resolve-TelegramCommand '/debrief') -eq 'debrief') "/debrief -> debrief"
+Assert ((Resolve-TelegramCommand 'debrief') -eq 'debrief') "debrief -> debrief"
+Assert ((Resolve-TelegramCommand "what's my day") -eq 'debrief') "natural phrasing -> debrief"
+Assert ((Resolve-TelegramCommand '/debrief@JarvisButlerBot') -eq 'debrief') "strips @botname"
+Assert ((Resolve-TelegramCommand 'STATUS') -eq 'status') "case-insensitive status"
+Assert ((Resolve-TelegramCommand '/status') -eq 'status') "/status -> status"
+Assert ((Resolve-TelegramCommand 'ping') -eq 'status') "ping -> status"
+Assert ((Resolve-TelegramCommand 'delete all my files') -eq 'help') "arbitrary text is NOT executed -> help"
+Assert ((Resolve-TelegramCommand '') -eq 'help') "empty -> help"
+Assert ((Resolve-TelegramCommand $null) -eq 'help') "null -> help"
+
+# --- Test-TelegramSenderAllowed: the self-only gate (numeric/string ids must compare equal) ---
+Assert (Test-TelegramSenderAllowed 555 555) "same id allowed"
+Assert (Test-TelegramSenderAllowed '555' 555) "string vs numeric id allowed"
+Assert (-not (Test-TelegramSenderAllowed 999 555)) "different id refused"
+Assert (-not (Test-TelegramSenderAllowed 555 $null)) "no allowed id -> refuse (fail closed)"
+Assert (-not (Test-TelegramSenderAllowed $null 555)) "null sender refused"
+
+# --- Parse-TelegramUpdates: robust flattening of the getUpdates payload ---
+$json = @'
+{ "ok": true, "result": [
+  { "update_id": 100, "message": { "message_id": 1, "chat": { "id": 555 }, "text": "/debrief" } },
+  { "update_id": 101, "message": { "message_id": 2, "chat": { "id": 555 }, "text": "hello" } },
+  { "update_id": 102, "edited_message": { "message_id": 3, "chat": { "id": 555 }, "text": "edited" } }
+] }
+'@
+$resp = $json | ConvertFrom-Json
+$ups = @(Parse-TelegramUpdates $resp)
+Assert ($ups.Count -eq 3) "3 updates parsed, got $($ups.Count)"
+Assert ($ups[0].UpdateId -eq 100 -and $ups[0].ChatId -eq 555 -and $ups[0].Text -eq '/debrief') "first update fields"
+Assert ($ups[2].Text -eq 'edited') "edited_message is handled"
+Assert ((@(Parse-TelegramUpdates ($null))).Count -eq 0) "null response -> empty"
+$notok = '{ "ok": false, "result": [] }' | ConvertFrom-Json
+Assert ((@(Parse-TelegramUpdates $notok)).Count -eq 0) "ok:false -> empty"
+
+# --- Get-NextOffset: highest update_id + 1 (Telegram's ack contract) ---
+Assert ((Get-NextOffset $ups) -eq 103) "next offset = max+1 = 103"
+Assert ($null -eq (Get-NextOffset @())) "no updates -> null offset"
+
+# --- Format-JobMailAlert: pushes ONLY real status changes, never digests ---
+$alerts = @(
+  [pscustomobject]@{ Subject='Invitation to interview'; Classification='interview' },
+  [pscustomobject]@{ Subject='5 new jobs for you';      Classification='generic' },
+  [pscustomobject]@{ Subject='Offer of employment';     Classification='offer' }
+)
+$msg = Format-JobMailAlert $alerts
+Assert ($msg -match 'INTERVIEW' -and $msg -match 'OFFER') "alert names interview + offer"
+Assert ($msg -notmatch 'new jobs') "generic digest is NOT pushed"
+Assert ($null -eq (Format-JobMailAlert @([pscustomobject]@{ Subject='x'; Classification='generic' }))) "all-generic -> no push"
+Assert ($null -eq (Format-JobMailAlert @())) "empty -> no push"
+
+Write-Host "telegram-bot: ALL PASS"

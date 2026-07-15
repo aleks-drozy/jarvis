@@ -18,6 +18,8 @@ contextBridge.exposeInMainWorld('jarvis', {
   micAudio: (buf) => ipcRenderer.invoke('mic:audio', buf),
   micCancelled: (reason) => ipcRenderer.send('mic:cancelled', reason),
   summonTyping: () => ipcRenderer.send('summon:typing'),
+  wakeDetected: () => ipcRenderer.send('wake:detected'),
+  onWakeConfig: (cb) => ipcRenderer.on('wake:config', (_e, cfg) => cb(cfg)),
   onMicStart: (cb) => ipcRenderer.on('mic:start', () => cb()),
   onMicStop: (cb) => ipcRenderer.on('mic:stop', () => cb()),
   onMicCancel: (cb) => ipcRenderer.on('mic:cancel', () => cb()),
