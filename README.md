@@ -79,16 +79,8 @@ base.en model into a gitignored vendor dir).
 
 ## Optional integrations (opt-in, off by default)
 
-Two newer capabilities ship wired but **off** until I add my own credentials - the agent is not
-allowed to create accounts or hold tokens, so activation is a manual step.
-
-**Wake word ("Jarvis").** Always-listening hotword via Picovoice Porcupine, running in the orb's
-renderer. The detection gate (debounce + a post-reply cooldown so my spoken answer can't re-trigger
-the mic) is pure and unit-tested; the Porcupine binding itself needs setup + a field test. To enable:
-1. Free AccessKey from console.picovoice.ai -> `skill/bin/get-picovoice-key.ps1 -StoreCredential`
-2. `npm install @picovoice/porcupine-web @picovoice/web-voice-processor`, then copy their browser
-   builds into `app/vendor/porcupine/` as `porcupine-web.js` + `web-voice-processor.js`
-3. Set `wake_word: on` in CONFIG.md. "Jarvis" is a free built-in keyword, so no custom model needed.
+Ships wired but **off** until I add my own credentials - the agent is not allowed to create accounts
+or hold tokens, so activation is a manual step.
 
 **Telegram remote.** A self-only bridge (`skill/bin/telegram-bot.ps1`) to trigger a debrief or check
 status from my phone, and to push application-status alerts (interview / offer / rejection, classified
