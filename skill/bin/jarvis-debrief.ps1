@@ -1,4 +1,7 @@
 # skill/bin/jarvis-debrief.ps1 - run by Task Scheduler at 08:30 (or manually from a NORMAL terminal).
+# -Channel overrides where the finished note is delivered (telegram | email | both); default reads
+# CONFIG.md 'debrief_delivery' (falling back to email). The Telegram /debrief command passes 'telegram'.
+param([ValidateSet('telegram','email','both','')][string]$Channel = '')
 $ErrorActionPreference = 'Stop'
 $vault    = 'C:\Users\Alex\ObsidianVault\claude-memory\12-jarvis'
 $skillDir = Join-Path $HOME '.claude\skills\jarvis'
@@ -15,6 +18,17 @@ function Toast($msg) {
     $null = $t.GetElementsByTagName('text')[0].AppendChild($t.CreateTextNode($msg))
     [Windows.UI.Notifications.ToastNotificationManager]::CreateToastNotifier('Jarvis').Show([Windows.UI.Notifications.ToastNotification]::new($t))
   } catch { }  # toast is best-effort
+}
+
+function Get-DebriefChannel {
+  # where to deliver the finished debrief: telegram | email | both. Reads CONFIG.md; defaults to email
+  # (back-compat) if the key is absent or unreadable.
+  try {
+    $m = [regex]::Match((Get-Content (Join-Path $vault 'CONFIG.md') -Raw),
+      '(?m)^\s*-?\s*debrief_delivery:\s*(telegram|email|both)\b')
+    if ($m.Success) { return $m.Groups[1].Value.ToLower() }
+  } catch { }
+  return 'email'
 }
 
 try {
@@ -52,19 +66,29 @@ try {
   # Send IN-PROCESS (dot-source) so a send failure is a terminating error caught below. An external
   # `& powershell -NoProfile -File $sender` does NOT propagate its non-zero exit into this try, so a
   # failed delivery (SMTP down, expired app password, no network) would fall through and be logged as
-  # "run ok" with a success toast — a silent miss of the actual deliverable. (Safety: the sender's
+  # "run ok" with a success toast - a silent miss of the actual deliverable. (Safety: the sender's
   # own Safety-rule-2 guard locks the recipient to the owner.)
-  . $sender -DotSourceOnly
-  # Honesty stamp (design 8): a late catch-up names itself and its cause in the note, the email
-  # subject, and the log - it must never masquerade as an on-time morning. Boot time after 08:30
-  # proves the machine was powered off (shutdown defeats the wake timer - witnessed 2026-07-14).
+  . $sender -DotSourceOnly    # Get-LatenessNote, Send-Debrief, OwnerEmail (dot-source only; no send yet)
+  # Honesty stamp (design 8): a late catch-up names itself and its cause in the note, the delivery, and
+  # the log - it must never masquerade as an on-time morning. Boot time after 08:30 proves the machine
+  # was powered off (shutdown defeats the wake timer - witnessed 2026-07-14).
   $boot = (Get-CimInstance Win32_OperatingSystem).LastBootUpTime
   $lateNote = Get-LatenessNote -RunStart $runStart -BootTime $boot
   if ($lateNote) { Add-Content -Encoding UTF8 -Path $note -Value "`n> $lateNote" }
-  Send-Debrief -NotePath $note -ToAddress $OwnerEmail -RunStart $runStart -BootTime $boot
+
+  # Deliver per channel. Each delivery throws on failure so it is caught below (loud FAILED, never a
+  # silent miss). Self-only is enforced inside both senders (email recipient lock; Telegram chat-id lock).
+  $channel = if ($Channel) { $Channel } else { Get-DebriefChannel }
+  if ($channel -eq 'telegram' -or $channel -eq 'both') {
+    . (Join-Path $PSScriptRoot 'telegram-bot.ps1') -DotSourceOnly
+    Send-DebriefTelegram -NotePath $note
+  }
+  if ($channel -eq 'email' -or $channel -eq 'both') {
+    Send-Debrief -NotePath $note -ToAddress $OwnerEmail -RunStart $runStart -BootTime $boot
+  }
   if ($lateNote) { Toast "Debrief ready (late catch-up), Sir." } else { Toast "Debrief ready, Sir." }
   $lateTag = ''; if ($lateNote) { $lateTag = ' [late catch-up]' }
-  "$([datetime]::Now.ToString('s')) run ok (note written $((Get-Item $note).LastWriteTime.ToString('t')))$lateTag" | Add-Content $log
+  "$([datetime]::Now.ToString('s')) run ok (note written $((Get-Item $note).LastWriteTime.ToString('t')), via $channel)$lateTag" | Add-Content $log
 } catch {
   $err = $_.Exception.Message
   "$([datetime]::Now.ToString('s')) run FAILED: $err" | Add-Content $log

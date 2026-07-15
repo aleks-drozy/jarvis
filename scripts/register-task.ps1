@@ -17,5 +17,5 @@ $settings = New-ScheduledTaskSettingsSet -StartWhenAvailable -WakeToRun `
   -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries `
   -ExecutionTimeLimit (New-TimeSpan -Minutes 15)
 Register-ScheduledTask -TaskName 'Jarvis Morning Debrief' -Action $action -Trigger $trigger `
-  -Settings $settings -Description 'Generates and emails Alex the morning debrief' -Force
+  -Settings $settings -Description 'Generates and delivers Alex the morning debrief (Telegram/email per CONFIG debrief_delivery)' -Force
 Write-Host "Registered 'Jarvis Morning Debrief' at 08:30 (machine-local)."

@@ -98,6 +98,27 @@ function Limit-Text {
   return $Text.Substring(0, $Max) + "`n...(truncated - full note on the desktop, Sir)"
 }
 
+function Split-TelegramText {
+  # Split into <=Max-char chunks on line boundaries where possible (Telegram caps a message at 4096) so a
+  # long debrief is delivered whole rather than truncated. A single over-long line is hard-split. Pure.
+  param([string]$Text, [int]$Max = 3900)
+  $chunks = New-Object System.Collections.Generic.List[string]
+  if (-not $Text) { return $chunks }
+  $cur = ''
+  foreach ($line0 in ($Text -split "`n")) {
+    $line = $line0
+    while ($line.Length -gt $Max) {                       # a line longer than the cap: flush, then hard-split
+      if ($cur -ne '') { $chunks.Add($cur); $cur = '' }
+      $chunks.Add($line.Substring(0, $Max)); $line = $line.Substring($Max)
+    }
+    $candidate = if ($cur -eq '') { $line } else { "$cur`n$line" }
+    if ($candidate.Length -le $Max) { $cur = $candidate }
+    else { if ($cur -ne '') { $chunks.Add($cur) }; $cur = $line }
+  }
+  if ($cur -ne '') { $chunks.Add($cur) }
+  return $chunks
+}
+
 # ---------- network + side-effecting (guarded behind -DotSourceOnly) ----------
 
 function Get-TelegramCred {
@@ -122,6 +143,20 @@ function Send-Telegram {
   }
   return Invoke-TelegramApi -Token $Cred.Token -Method 'sendMessage' `
     -Body @{ chat_id = $ToChatId; text = $Text; disable_web_page_preview = 'true' }
+}
+
+function Send-DebriefTelegram {
+  # Deliver a debrief note to Alex's Telegram (self-only via Send-Telegram). Strips frontmatter and
+  # splits into <=4096-char chunks so a long briefing is never truncated. Throws on failure so the 08:30
+  # wrapper's try/catch turns it into a loud FAILED rather than a silent miss.
+  param([string]$NotePath, $Cred)
+  if (-not $Cred) { $Cred = Get-TelegramCred }
+  if (-not (Test-Path $NotePath)) { throw "no debrief note at $NotePath" }
+  $body = Get-Content -LiteralPath $NotePath -Raw -Encoding UTF8
+  $body = [regex]::Replace($body, '(?s)\A\s*---\r?\n.*?\r?\n---\r?\n', '').TrimStart()   # strip frontmatter
+  $parts = @(Split-TelegramText $body 3900)
+  if ($parts.Count -eq 0) { throw "debrief note is empty - not sending" }
+  foreach ($chunk in $parts) { Send-Telegram -Text $chunk -Cred $Cred | Out-Null }
 }
 
 function Get-TodayDebriefText {
@@ -157,13 +192,11 @@ function Invoke-TelegramCommand {
   param([string]$Command, $Cred)
   switch ($Command) {
     'debrief' {
-      Send-Telegram -Text 'On it, Sir. Generating your debrief now.' -Cred $Cred | Out-Null
-      try {
-        & (Join-Path $BIN 'jarvis-debrief.ps1') | Out-Null
-        $note = Get-TodayDebriefText
-        if ($note) { Send-Telegram -Text (Limit-Text $note) -Cred $Cred | Out-Null }
-        else { Send-Telegram -Text 'Debrief ran, but I could not find the note, Sir. Check the desktop.' -Cred $Cred | Out-Null }
-      } catch { Send-Telegram -Text "The debrief run failed, Sir: $($_.Exception.Message)" -Cred $Cred | Out-Null }
+      Send-Telegram -Text 'On it, Sir. Generating your debrief now - it will arrive here shortly.' -Cred $Cred | Out-Null
+      # -Channel telegram makes the wrapper deliver the finished note to Telegram itself (chunked). We do
+      # NOT also send it here - that double-sent the briefing. On failure the wrapper alarms on the PC.
+      try { & (Join-Path $BIN 'jarvis-debrief.ps1') -Channel telegram | Out-Null }
+      catch { Send-Telegram -Text "The debrief run failed, Sir: $($_.Exception.Message)" -Cred $Cred | Out-Null }
     }
     'status' { Send-Telegram -Text (Get-StatusText) -Cred $Cred | Out-Null }
     default  { Send-Telegram -Text 'I take /debrief and /status here, Sir. For a full conversation, summon me on the desktop (Ctrl+Shift+J).' -Cred $Cred | Out-Null }
