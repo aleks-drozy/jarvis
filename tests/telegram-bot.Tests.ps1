@@ -56,4 +56,18 @@ Assert ($msg -notmatch 'new jobs') "generic digest is NOT pushed"
 Assert ($null -eq (Format-JobMailAlert @([pscustomobject]@{ Subject='x'; Classification='generic' }))) "all-generic -> no push"
 Assert ($null -eq (Format-JobMailAlert @())) "empty -> no push"
 
+# --- Split-TelegramText: chunk a long debrief so nothing is truncated (Telegram caps at 4096) ---
+$one = @(Split-TelegramText 'short line' 100)
+Assert ($one.Count -eq 1 -and $one[0] -eq 'short line') "short text -> single chunk"
+Assert ((@(Split-TelegramText '' 100)).Count -eq 0) "empty text -> no chunks"
+$txt = (1..12 | ForEach-Object { "line$_" }) -join "`n"
+$chunks = @(Split-TelegramText $txt 20)
+Assert ($chunks.Count -gt 1) "long text splits into multiple chunks"
+Assert ((@($chunks | Where-Object { $_.Length -gt 20 })).Count -eq 0) "no chunk exceeds the cap"
+Assert (((($chunks -join "`n") -replace "`n",'')) -eq ($txt -replace "`n",'')) "content preserved across chunks"
+$long = 'x' * 55
+$hc = @(Split-TelegramText $long 20)
+Assert ((@($hc | Where-Object { $_.Length -gt 20 })).Count -eq 0) "over-long single line hard-split under cap"
+Assert (($hc -join '') -eq $long) "hard-split preserves the whole line"
+
 Write-Host "telegram-bot: ALL PASS"
