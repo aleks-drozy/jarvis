@@ -56,6 +56,34 @@ function Decode-MimeHeader {
   return $out
 }
 
+function Classify-JobMailSubject {
+  # Coarse application-status guess from the SUBJECT LINE ALONE (headers only - Safety 5; bodies never
+  # read). Precedence: digest -> rejection -> interview -> offer -> generic. Subject-only is imperfect
+  # (an ambiguous "Update on your application" reads 'generic'), so the downstream policy is
+  # flag-and-confirm in the debrief - never a silent tracker write.
+  param([string]$Subject)
+  if (-not $Subject) { return 'generic' }
+  $s = $Subject
+  $digest    = 'job alert|jobs? for you|new jobs?|\d+\+? (new )?jobs?|recommended for you|jobs? matching|weekly (jobs|digest)|interview tips|career tips|newsletter'
+  $rejection = 'unfortunately|regret to inform|not been (successful|shortlisted|selected)|(was|were) not successful|not successful on this occasion|other candidates|not (moving|proceeding|progressing) (forward|with)|will not be (moving|proceeding|progressing)|decided not to (move|proceed|progress)|no longer under consideration|not shortlisted|unsuccessful'
+  $interview = 'interview|phone screen|schedule (a|your) (call|time|chat)|book a (time|slot|call)|next steps|next stage|(technical|coding|online) (test|challenge|assessment)|assessment|invitation to|invite you to|availability (for|to)|meet the team|first round|final round'
+  $offer     = 'offer of employment|job offer|offer letter|pleased to offer you|delighted to offer you|formal offer|would like to offer you the'
+  if ($s -imatch $digest)    { return 'generic' }
+  if ($s -imatch $rejection) { return 'rejection' }
+  if ($s -imatch $interview) { return 'interview' }
+  if ($s -imatch $offer)     { return 'offer' }
+  return 'generic'
+}
+
+function Add-JobMailClassification {
+  # Tags each alert object in place with a Classification note-property from its subject.
+  param([object[]]$Alerts)
+  foreach ($a in $Alerts) {
+    $a | Add-Member -NotePropertyName Classification -NotePropertyValue (Classify-JobMailSubject $a.Subject) -Force
+  }
+  return $Alerts
+}
+
 function Get-JobMail {
   param([int]$SinceHours, [string]$SenderFilter, [int]$MaxMessages,
         [string]$SensitiveFilter = '', [string]$Mode = 'jobs')
@@ -116,6 +144,7 @@ function Get-JobMail {
     $null = Invoke-ImapCommand $writer $reader 'a9' 'LOGOUT'
 
     $alerts = @($mails | Where-Object { $_.From -match $SenderFilter -or $_.Subject -match $SenderFilter })
+    $alerts = @(Add-JobMailClassification $alerts)   # tag each with interview/rejection/offer/generic
     $result = [ordered]@{
       CheckedAt   = (Get-Date).ToString('s')
       SinceHours  = $SinceHours

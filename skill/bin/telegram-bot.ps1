@@ -1,0 +1,248 @@
+# skill/bin/telegram-bot.ps1
+# Remote control + push channel over Telegram. SELF-ONLY: the bot talks to exactly one chat id (Alex's
+# own, stored in the credential). A message from any other chat id is ignored; a send to any other chat
+# id is refused in code before the network is touched (Safety rule 2, same spirit as the email recipient
+# lock in send-debrief.ps1). The remote surface is deliberately NARROW - /debrief and /status only,
+# never arbitrary command execution, so a leaked token cannot be turned into a shell. Bodies are never
+# read from mail here. The bot token is DPAPI-encrypted at ~/.jarvis/telegram.cred.xml, never in the
+# repo or vault (Safety rule 6). ASCII only (PS 5.1 reads .ps1 as ANSI).
+#
+# One-time setup (RUN BY ALEX, interactive - Jarvis never creates the bot or handles the raw token):
+#   1. In Telegram, message @BotFather -> /newbot -> copy the HTTP API token it gives you.
+#   2. Message your new bot once (say "hi") so a chat exists between you and it.
+#   3. powershell -File telegram-bot.ps1 -StoreCredential      (paste the token; it auto-detects your chat id)
+#   4. Flip CONFIG.md   modules: telegram: on
+#
+# Usage after setup:
+#   telegram-bot.ps1 -Send -Text "..."     push a one-off message to Alex (self only)
+#   telegram-bot.ps1 -Once                  one long-poll for incoming commands (for Task Scheduler)
+#   telegram-bot.ps1 -Poll                  continuous long-poll loop (foreground/manual)
+#   telegram-bot.ps1 -AlertJobMail          push IF a recent job email classifies interview/offer/rejection
+param(
+  [switch]$StoreCredential, [string]$Token,
+  [switch]$Send, [string]$Text,
+  [switch]$Poll, [switch]$Once,
+  [switch]$AlertJobMail, [int]$SinceHours = 24,
+  [switch]$DotSourceOnly,
+  [string]$CredPath   = (Join-Path $HOME '.jarvis\telegram.cred.xml'),
+  [string]$OffsetPath = (Join-Path $HOME '.jarvis\telegram-offset.json'),
+  [string]$ApiBase    = 'https://api.telegram.org'
+)
+$ErrorActionPreference = 'Stop'
+$BIN = $PSScriptRoot
+$VAULT = 'C:\Users\Alex\ObsidianVault\claude-memory\12-jarvis'
+
+# ---------- pure helpers (unit-tested; no network) ----------
+
+function Resolve-TelegramCommand {
+  # Map an incoming message to ONE of a small whitelist of safe actions. Default = help. This is not a
+  # shell: unknown text never executes anything - it just gets the help reply.
+  param([string]$Text)
+  if (-not $Text) { return 'help' }
+  $t = $Text.Trim().ToLower() -replace '^/','' -replace '@\w+$',''   # strip a leading slash and @botname
+  switch -regex ($t) {
+    '^(debrief|brief|briefing|what''?s my day|what should i do)$' { return 'debrief' }
+    '^(status|health|how are you|ping)$'                          { return 'status' }
+    default { return 'help' }
+  }
+}
+
+function Test-TelegramSenderAllowed {
+  # Fail closed: only the stored owner chat id is ever allowed. Compare as strings so 555 == "555".
+  param($ChatId, $AllowedChatId)
+  if ($null -eq $AllowedChatId -or "$AllowedChatId" -eq '') { return $false }
+  if ($null -eq $ChatId -or "$ChatId" -eq '') { return $false }
+  return ("$ChatId" -eq "$AllowedChatId")
+}
+
+function Parse-TelegramUpdates {
+  # getUpdates JSON -> flat list of {UpdateId, ChatId, Text}. Tolerates missing message/chat/text and
+  # edited messages. Returns the List so callers wrap with @() and enumerate (empty stays 0-count).
+  param($Response)
+  $out = New-Object System.Collections.Generic.List[object]
+  if ($null -eq $Response -or -not $Response.ok -or $null -eq $Response.result) { return $out }
+  foreach ($u in $Response.result) {
+    $msg = $u.message
+    if ($null -eq $msg) { $msg = $u.edited_message }
+    $chatId = $null; $text = $null
+    if ($msg -and $msg.chat) { $chatId = $msg.chat.id }
+    if ($msg) { $text = $msg.text }
+    $out.Add([pscustomobject]@{ UpdateId = [long]$u.update_id; ChatId = $chatId; Text = $text })
+  }
+  return $out
+}
+
+function Get-NextOffset {
+  # Telegram consumes a batch when you next call getUpdates with (highest update_id + 1).
+  param($Updates)
+  $max = -1
+  foreach ($u in $Updates) { if ($u.UpdateId -gt $max) { $max = $u.UpdateId } }
+  if ($max -lt 0) { return $null }
+  return $max + 1
+}
+
+function Format-JobMailAlert {
+  # Compose a push from classified alerts. Returns $null when nothing is worth pinging (digests/generic).
+  param($Alerts)
+  $hot = @($Alerts | Where-Object { $_.Classification -in @('interview','offer','rejection') })
+  if ($hot.Count -eq 0) { return $null }
+  $lines = foreach ($a in $hot) { "$($a.Classification.ToUpper()) - $($a.Subject)" }
+  return "Sir, application news:`n" + ($lines -join "`n")
+}
+
+function Limit-Text {
+  # Telegram caps a message at 4096 chars; keep well under and mark the cut.
+  param([string]$Text, [int]$Max = 3900)
+  if (-not $Text) { return $Text }
+  if ($Text.Length -le $Max) { return $Text }
+  return $Text.Substring(0, $Max) + "`n...(truncated - full note on the desktop, Sir)"
+}
+
+# ---------- network + side-effecting (guarded behind -DotSourceOnly) ----------
+
+function Get-TelegramCred {
+  if (-not (Test-Path $CredPath)) { throw "Missing $CredPath - run telegram-bot.ps1 -StoreCredential first." }
+  $c = Import-Clixml $CredPath
+  return [pscustomobject]@{ ChatId = $c.UserName; Token = $c.GetNetworkCredential().Password }
+}
+
+function Invoke-TelegramApi {
+  param([string]$Token, [string]$Method, [hashtable]$Body)
+  return Invoke-RestMethod -Uri "$ApiBase/bot$Token/$Method" -Method Post -Body $Body -TimeoutSec 65
+}
+
+function Send-Telegram {
+  # Self-only (Safety 2): refuse any chat id other than the stored owner, BEFORE the network call, so a
+  # prompt-injected Jarvis cannot exfiltrate to a third party.
+  param([string]$Text, $ToChatId, $Cred)
+  if (-not $Cred) { $Cred = Get-TelegramCred }
+  if (-not $ToChatId) { $ToChatId = $Cred.ChatId }
+  if (-not (Test-TelegramSenderAllowed $ToChatId $Cred.ChatId)) {
+    throw "Safety rule 2 (self-only): refusing to send to chat '$ToChatId' - locked to $($Cred.ChatId)."
+  }
+  return Invoke-TelegramApi -Token $Cred.Token -Method 'sendMessage' `
+    -Body @{ chat_id = $ToChatId; text = $Text; disable_web_page_preview = 'true' }
+}
+
+function Get-TodayDebriefText {
+  $iso = (Get-Date).ToString('yyyy-MM-dd')
+  $p = Join-Path $VAULT ("debriefs\$iso.md")
+  if (-not (Test-Path $p)) { return $null }
+  $t = Get-Content -LiteralPath $p -Raw -Encoding UTF8
+  $t = [regex]::Replace($t, '(?s)\A\s*---\r?\n.*?\r?\n---\r?\n', '').TrimStart()   # strip frontmatter
+  return $t
+}
+
+function Get-StatusText {
+  $parts = New-Object System.Collections.Generic.List[string]
+  try {
+    $s = & (Join-Path $BIN 'scheduler-status.ps1') | ConvertFrom-Json
+    $en = if ($s.enabled) { 'enabled' } else { 'disabled' }
+    $nx = if ($s.nextRun) { $s.nextRun } else { 'unknown' }
+    $parts.Add("Debrief task: $en; next $nx")
+  } catch { $parts.Add('Debrief task: status unavailable') }
+  $hb = Join-Path $HOME '.jarvis\bank-heartbeat.json'
+  if (Test-Path $hb) {
+    try {
+      $h = (Get-Content $hb -Raw) -replace '^\xEF\xBB\xBF','' | ConvertFrom-Json
+      $parts.Add("Bank feed: " + $(if ($h.ok) { "ok (as of $($h.asOf))" } else { "error" }))
+    } catch { }
+  }
+  $note = Get-TodayDebriefText
+  $parts.Add($(if ($note) { "Today's debrief: written." } else { "Today's debrief: not yet." }))
+  return "At your service, Sir.`n" + ($parts -join "`n")
+}
+
+function Invoke-TelegramCommand {
+  param([string]$Command, $Cred)
+  switch ($Command) {
+    'debrief' {
+      Send-Telegram -Text 'On it, Sir. Generating your debrief now.' -Cred $Cred | Out-Null
+      try {
+        & (Join-Path $BIN 'jarvis-debrief.ps1') | Out-Null
+        $note = Get-TodayDebriefText
+        if ($note) { Send-Telegram -Text (Limit-Text $note) -Cred $Cred | Out-Null }
+        else { Send-Telegram -Text 'Debrief ran, but I could not find the note, Sir. Check the desktop.' -Cred $Cred | Out-Null }
+      } catch { Send-Telegram -Text "The debrief run failed, Sir: $($_.Exception.Message)" -Cred $Cred | Out-Null }
+    }
+    'status' { Send-Telegram -Text (Get-StatusText) -Cred $Cred | Out-Null }
+    default  { Send-Telegram -Text 'I take /debrief and /status here, Sir. For a full conversation, summon me on the desktop (Ctrl+Shift+J).' -Cred $Cred | Out-Null }
+  }
+}
+
+function Read-Offset { if (Test-Path $OffsetPath) { try { return (Get-Content $OffsetPath -Raw | ConvertFrom-Json).offset } catch { return $null } } return $null }
+function Write-Offset { param($Offset) @{ offset = $Offset } | ConvertTo-Json | Set-Content -Encoding ASCII $OffsetPath }
+
+function Invoke-PollOnce {
+  # One long-poll: fetch, act on allowed commands, advance the offset. Returns count handled.
+  param($Cred, [int]$TimeoutSec = 30)
+  $offset = Read-Offset
+  $body = @{ timeout = $TimeoutSec }
+  if ($offset) { $body.offset = $offset }
+  $resp = Invoke-TelegramApi -Token $Cred.Token -Method 'getUpdates' -Body $body
+  $ups = @(Parse-TelegramUpdates $resp)
+  foreach ($u in $ups) {
+    if (Test-TelegramSenderAllowed $u.ChatId $Cred.ChatId) {
+      # A failed command must NOT abort the batch: an escaping throw would skip Write-Offset and make
+      # the next poll replay the whole batch (duplicate debriefs/emails). Catch and drop; never retry.
+      try { Invoke-TelegramCommand -Command (Resolve-TelegramCommand $u.Text) -Cred $Cred }
+      catch { Write-Warning "command failed (dropped, not retried): $($_.Exception.Message)" }
+    }   # messages from any other chat id are silently ignored (self-only)
+  }
+  $next = Get-NextOffset $ups
+  if ($next) { Write-Offset $next }
+  return $ups.Count
+}
+
+if ($DotSourceOnly) { return }
+
+# ---------- mode dispatch ----------
+if ($StoreCredential) {
+  if (-not $Token) {
+    $sec = Read-Host -AsSecureString 'Paste your BotFather token'
+    $Token = [Runtime.InteropServices.Marshal]::PtrToStringAuto([Runtime.InteropServices.Marshal]::SecureStringToBSTR($sec))
+  }
+  Write-Host 'Detecting your chat id (make sure you have already messaged the bot at least once)...'
+  $resp = Invoke-TelegramApi -Token $Token -Method 'getUpdates' -Body @{ timeout = 0 }
+  $ups = @(Parse-TelegramUpdates $resp)
+  # Fail closed when binding the owner: the bot's @username is public, so a stranger could have messaged
+  # it. Require EXACTLY one distinct chat id, else refuse rather than silently binding the wrong owner.
+  $chatIds = @($ups | Where-Object { $_.ChatId } | ForEach-Object { "$($_.ChatId)" } | Select-Object -Unique)
+  if ($chatIds.Count -eq 0) { throw 'No chat id found - message your bot ("hi") in Telegram first, then re-run -StoreCredential.' }
+  if ($chatIds.Count -gt 1) { throw "Ambiguous owner: getUpdates shows more than one chat id ($($chatIds -join ', ')). Someone else may have messaged your bot. Make sure only YOU have, then re-run -StoreCredential." }
+  $chatId = $chatIds[0]
+  $dir = Split-Path $CredPath
+  if (-not (Test-Path $dir)) { New-Item -ItemType Directory -Force $dir | Out-Null }   # Export-Clixml won't create it
+  $sec = ConvertTo-SecureString $Token -AsPlainText -Force
+  New-Object System.Management.Automation.PSCredential("$chatId", $sec) | Export-Clixml $CredPath
+  Write-Host "Stored (DPAPI-encrypted to this Windows user): $CredPath  (owner chat id $chatId)"
+  Write-Host 'Secrets never go in the repo or vault (Safety 6). Next: flip CONFIG.md modules: telegram: on'
+  exit 0
+}
+
+$cred = Get-TelegramCred
+
+if ($Send) {
+  if (-not $Text) { throw '-Send requires -Text' }
+  Send-Telegram -Text $Text -Cred $cred | Out-Null
+  Write-Host 'Sent.'
+  exit 0
+}
+
+if ($AlertJobMail) {
+  . (Join-Path $BIN 'check-job-mail.ps1') -DotSourceOnly
+  $res = Get-JobMail -SinceHours $SinceHours -SenderFilter 'linkedin|indeed|gradireland|glassdoor|jobs\.ie|irishjobs|mastercard|workday|myworkday|maynooth|nuim\.ie|vodafone' -MaxMessages 40 -Mode 'jobs'
+  $msg = Format-JobMailAlert $res.JobAlerts
+  if ($msg) { Send-Telegram -Text $msg -Cred $cred | Out-Null; Write-Host 'Alert sent.' }
+  else { Write-Host 'No status-change mail to alert on.' }
+  exit 0
+}
+
+if ($Once) { $n = Invoke-PollOnce -Cred $cred -TimeoutSec 30; Write-Host "Handled $n update(s)."; exit 0 }
+
+if ($Poll) {
+  Write-Host 'Long-polling for commands (Ctrl+C to stop). Self-only; only your chat id is honoured.'
+  while ($true) { try { Invoke-PollOnce -Cred $cred -TimeoutSec 50 | Out-Null } catch { Write-Warning $_.Exception.Message; Start-Sleep -Seconds 5 } }
+}
+
+Write-Host 'Nothing to do. Use -Send / -Once / -Poll / -AlertJobMail (or -StoreCredential for first-time setup).'
