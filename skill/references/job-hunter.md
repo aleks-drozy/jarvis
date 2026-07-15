@@ -41,11 +41,19 @@ NEVER scrape LinkedIn/Indeed directly — ToS violation, account-ban risk (see 2
    "Follow-up due" = applied date + 10 days.
 
 ## 3. Track from email ("check my applications / any news")
-Interactive sessions only (Gmail connector). Search recent mail for application-related messages:
-confirmations, rejections, interview invites, recruiter replies.
-- Match to tracker rows by company name; update Status (Applied -> Interview / Rejected / Offer),
+Two sources feed this, both header-only (sender + subject + date, never bodies — Safety 5):
+- **Headless (morning debrief / any session):** `bin/check-job-mail.ps1` tags every job-alert email with a
+  `Classification` (interview / rejection / offer / generic) from the subject line. This runs without the
+  Gmail connector, so status changes surface in the 08:30 debrief too.
+- **Interactive (richer):** the claude.ai Gmail connector, for recruiter replies the sender/subject filter misses.
+
+Then, for any interview / offer / rejection:
+- Match to tracker rows by company name; propose the Status change (Applied -> Interview / Rejected / Offer),
   citing the email subject + date as the source.
-- Unmatched application emails: add a row (Alex may have applied outside Jarvis).
+- **Confirm before writing.** Subject-only classification is imperfect (a generic "application update" can look
+  like a status change and vice-versa), so present the proposed change and let Alex confirm; only then update
+  JOB_SEARCH.md. Writing the tracker is allowed (Safety 7), but a wrong auto-write is worse than a one-word confirm.
+- Unmatched application emails: propose a new row (Alex may have applied outside Jarvis).
 - Never quote sensitive salary/personal details into the tracker beyond status; per Safety 5.
 
 ## 4. Debrief line (job module)
