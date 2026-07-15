@@ -20,7 +20,9 @@ CS & Software Engineering graduate (Maynooth University, 2026), Dublin.
 - Sweeps job boards (Jooble for Dublin; Adzuna for UK/other regions) for fresh roles, ranked by seniority tier
 - Reads job-alert emails (LinkedIn, Indeed, gradireland, Workday) via raw IMAP, headers only
 - Computes my weekly budget and savings pace
-- Assembles a "Today's Focus" top-3, writes the briefing to my vault, and emails it to me
+- Assembles a "Today's Focus" top-3, writes the briefing to my vault, and delivers it to me over
+  **Telegram** (or email, or both - set by `debrief_delivery` in CONFIG); long briefings are chunked
+- I can also text the bot `/debrief` or `/status` from my phone (a 3-min scheduled poller picks it up)
 - If anything fails, it alarms loudly; a silent crash is not allowed to impersonate a quiet day
 
 ## Architecture
