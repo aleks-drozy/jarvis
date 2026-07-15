@@ -9,7 +9,7 @@ A butler-style personal AI assistant, built as a **Claude Code agent skill** plu
 PowerShell automations. Every morning at 08:30 it researches my life and emails me a briefing.
 The rest of the day it answers on demand: budgeting, job hunting, project status, honest coaching.
 
-Built solo by [Aleksandrs Drozdovs](https://www.linkedin.com/in/aleksandrsdrozdovs/),
+Built solo by [Aleksandrs Drozdovs](https://www.linkedin.com/in/aleksandrs-drozdovs-13b730331/),
 CS & Software Engineering graduate (Maynooth University, 2026), Dublin.
 
 ## What it does, unattended, every morning
