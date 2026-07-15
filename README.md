@@ -68,12 +68,34 @@ that product to new signups in mid-2025. Rebuilt against Enable Banking within t
 
 ## Voice in, voice out
 
-Press `Ctrl+Shift+Space` anywhere: the desktop orb turns amber and listens, auto-stops after
-~2s of silence, transcribes **locally** with whisper.cpp (speech never leaves the machine),
-and routes the text through the same chat pipeline as typed commands. The reply comes back on
-the HUD and spoken aloud (edge-tts). Mic capture lives in the always-resident orb window:
-getUserMedia -> silence-gated PCM -> 16 kHz WAV -> whisper-cli. One-time setup:
-`scripts/setup-whisper.ps1` (fetches the CLI + base.en model into a gitignored vendor dir).
+Press `Ctrl+Shift+Space` anywhere: the desktop orb turns amber and listens, auto-stops when you
+stop talking (the silence gate calibrates to the room's noise floor at the start of each listen,
+rather than a fixed threshold), transcribes **locally** with whisper.cpp (speech never leaves the
+machine), and routes the text through the same chat pipeline as typed commands. The reply comes
+back on the HUD and spoken aloud (edge-tts). Mic capture lives in the always-resident orb window
+(`backgroundThrottling:false`, so it survives the orb being hidden): getUserMedia -> silence-gated
+PCM -> 16 kHz WAV -> whisper-cli. One-time setup: `scripts/setup-whisper.ps1` (fetches the CLI +
+base.en model into a gitignored vendor dir).
+
+## Optional integrations (opt-in, off by default)
+
+Two newer capabilities ship wired but **off** until I add my own credentials - the agent is not
+allowed to create accounts or hold tokens, so activation is a manual step.
+
+**Wake word ("Jarvis").** Always-listening hotword via Picovoice Porcupine, running in the orb's
+renderer. The detection gate (debounce + a post-reply cooldown so my spoken answer can't re-trigger
+the mic) is pure and unit-tested; the Porcupine binding itself needs setup + a field test. To enable:
+1. Free AccessKey from console.picovoice.ai -> `skill/bin/get-picovoice-key.ps1 -StoreCredential`
+2. `npm install @picovoice/porcupine-web @picovoice/web-voice-processor`, then copy their browser
+   builds into `app/vendor/porcupine/` as `porcupine-web.js` + `web-voice-processor.js`
+3. Set `wake_word: on` in CONFIG.md. "Jarvis" is a free built-in keyword, so no custom model needed.
+
+**Telegram remote.** A self-only bridge (`skill/bin/telegram-bot.ps1`) to trigger a debrief or check
+status from my phone, and to push application-status alerts (interview / offer / rejection, classified
+from the subject line only). It talks to exactly one chat id - mine - and the remote surface is
+deliberately narrow (`/debrief`, `/status`); it is not a shell. To enable:
+1. `@BotFather` -> `/newbot`, message the bot once, then `telegram-bot.ps1 -StoreCredential`
+2. Set `telegram: on` in CONFIG.md. Poll with `-Once` (Task Scheduler) or `-Poll` (foreground).
 
 ## Stack
 
