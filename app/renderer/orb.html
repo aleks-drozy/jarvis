@@ -85,10 +85,9 @@
     player.src = 'file:///' + String(file).replace(/\\/g, '/');
     player.play().catch(() => {});
   });
-  // Jarvis's own voice drives both the pulse AND the wake-word suppression: the reply must not re-trigger
-  // "Jarvis" (replyEnd re-arms the cooldown from the moment playback finishes, not when the user stopped).
-  player.addEventListener('play',  () => { startPulse(); wakeDispatch('replyStart'); });
-  player.addEventListener('ended', () => { stopPulse();  wakeDispatch('replyEnd'); });
+  // pulse runs only while audio actually plays (see startPulse comment)
+  player.addEventListener('play',  () => { startPulse(); });
+  player.addEventListener('ended', () => { stopPulse(); });
   player.addEventListener('pause', () => { stopPulse(); });
 
   document.body.addEventListener('click', () => window.jarvis.summonToggle());
@@ -132,7 +131,6 @@
             t0: performance.now(), calib: [], threshold: SILENCE_RMS_DEFAULT, calibrated: false };
     src.connect(proc); proc.connect(ctx.destination);
     document.body.classList.add('listening');
-    wakeDispatch('listenStart');   // keep the wake gate in sync no matter what started this listen
     proc.onaudioprocess = (e) => {
       if (!mic) return;
       const data = e.inputBuffer.getChannelData(0);
@@ -159,7 +157,6 @@
     if (!mic) return;
     const m = mic; mic = null;
     document.body.classList.remove('listening');
-    wakeDispatch('listenEnd');   // arm the cooldown so the spoken reply can't re-trigger the wake word
     core.style.transform = '';
     try { m.proc.disconnect(); m.stream.getTracks().forEach((t) => t.stop()); m.ctx.close(); } catch {}
     if (cancel || !m.spoke) { window.jarvis.micCancelled(); return; }
@@ -195,67 +192,9 @@
     return buf;
   }
 
-  // ---- wake word ("Jarvis"): always-listening trigger, OFF by default (CONFIG wake_word) ----
-  // Pure gate: decides when a detection actually starts a listen, and enforces a post-reply cooldown so
-  // the spoken response (or a repeated wake word) can't immediately re-trigger the mic. Unit-tested
-  // (wakeword-gate). The Porcupine binding below is the one piece not yet field-tested - see README.
-  function wakeReducer(state, event) {
-    const cd = event.cooldownMs || 1500;
-    switch (event.type) {
-      case 'wake':
-        if (state.listening) return { state, arm: false };            // a real listen is in progress
-        if (state.speaking) return { state, arm: false };             // Jarvis is speaking its reply
-        if (event.now < state.cooldownUntil) return { state, arm: false };
-        // Arm, and set a short guard window - but do NOT latch listening:true here. If the listen never
-        // actually starts (e.g. STT unavailable, main early-returns), nothing would ever clear a latch
-        // and the wake word would wedge forever; the guard just expires instead. Only listenStart marks
-        // a real listen.
-        return { state: { listening: false, speaking: false, cooldownUntil: event.now + cd }, arm: true };
-      case 'listenStart':
-        return { state: { listening: true, speaking: false, cooldownUntil: state.cooldownUntil }, arm: false };
-      case 'listenEnd':
-        return { state: { listening: false, speaking: state.speaking, cooldownUntil: event.now + cd }, arm: false };
-      case 'replyStart':
-        return { state: { listening: state.listening, speaking: true, cooldownUntil: state.cooldownUntil }, arm: false };
-      case 'replyEnd':
-        return { state: { listening: false, speaking: false, cooldownUntil: event.now + cd }, arm: false };
-      default:
-        return { state, arm: false };
-    }
-  }
-  let wakeState = { listening: false, speaking: false, cooldownUntil: 0 };
-  const WAKE_COOLDOWN_MS = 1500;
-  function wakeDispatch(type) {
-    const r = wakeReducer(wakeState, { type, now: performance.now(), cooldownMs: WAKE_COOLDOWN_MS });
-    wakeState = r.state;
-    if (r.arm) window.jarvis.wakeDetected();   // ask main to start a listen (reuses the whole pipeline)
-  }
-
-  let porcupine = null;
-  async function initWakeWord(cfg) {
-    // Entirely inert unless enabled AND a key is present, so the default (wake_word: off) can never
-    // destabilise the working orb. Any failure degrades to "no wake word", never a broken orb.
-    if (!cfg || !cfg.enabled) return;
-    if (!cfg.accessKey) { console.warn('[wake] enabled but no Picovoice AccessKey - see README wake-word setup'); return; }
-    try {
-      const p = await import('../vendor/porcupine/porcupine-web.js');   // vendored during setup
-      porcupine = await p.PorcupineWorker.create(
-        cfg.accessKey,
-        [p.BuiltInKeyword.Jarvis],                    // "Jarvis" is a free Porcupine built-in keyword
-        () => wakeDispatch('wake'),
-      );
-      const wvp = await import('../vendor/porcupine/web-voice-processor.js');
-      await wvp.WebVoiceProcessor.subscribe(porcupine);
-      console.log('[wake] listening for "Jarvis"');
-    } catch (e) {
-      console.warn('[wake] init failed (staying off): ' + e.message + ' - see README wake-word setup');
-    }
-  }
-
   window.jarvis.onMicStart(() => micStart());
   window.jarvis.onMicStop(() => micStop());
   window.jarvis.onMicCancel(() => micStop(true));   // discard, never transcribe (typing/summon closed)
-  window.jarvis.onWakeConfig((cfg) => initWakeWord(cfg));
 </script>
 </body>
 </html>
