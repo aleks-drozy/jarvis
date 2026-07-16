@@ -31,7 +31,28 @@ function Get-DebriefChannel {
   return 'email'
 }
 
+$lockFile  = Join-Path $HOME '.jarvis\debrief.lock'
+$lockTaken = $false
 try {
+  # SINGLE-FLIGHT. A debrief takes ~3 minutes and writes one shared note. Two overlapping runs (the
+  # 08:30 catch-up racing an on-demand /debrief, or a backlog of /debrief commands) each generate AND
+  # each deliver, so Alex gets the same briefing two or three times minutes apart. Witnessed 2026-07-16.
+  # A lock whose owner is dead, or older than 15 min, is treated as stale and taken over.
+  if (Test-Path $lockFile) {
+    $held = $null
+    try { $held = Get-Content $lockFile -Raw | ConvertFrom-Json } catch { $held = $null }
+    $alive = $false
+    if ($held -and $held.pid) { $alive = [bool](Get-Process -Id ([int]$held.pid) -ErrorAction SilentlyContinue) }
+    $isFresh = $false
+    if ($held -and $held.start) { try { $isFresh = ([datetime]$held.start -gt (Get-Date).AddMinutes(-15)) } catch { $isFresh = $false } }
+    if ($alive -and $isFresh) {
+      "$([datetime]::Now.ToString('s')) run skipped: a debrief is already running (pid $($held.pid))" | Add-Content $log
+      exit 0
+    }
+  }
+  @{ pid = $PID; start = (Get-Date).ToString('s') } | ConvertTo-Json | Set-Content -Encoding ASCII $lockFile
+  $lockTaken = $true
+
   $runStart = Get-Date
   "$($runStart.ToString('s')) run start" | Add-Content $log
 
@@ -99,4 +120,7 @@ try {
       Set-Content -Encoding UTF8 $note
   }
   Toast "Jarvis debrief failed - check .jarvis.log"
+} finally {
+  # release ONLY our own lock - a run that skipped because someone else holds it must not delete theirs
+  if ($lockTaken) { Remove-Item $lockFile -Force -ErrorAction SilentlyContinue }
 }
