@@ -260,7 +260,7 @@ function Invoke-TelegramCommand {
       Send-Telegram -Text 'On it, Sir. Generating your debrief now - it will arrive here shortly.' -Cred $Cred | Out-Null
       # -Channel telegram makes the wrapper deliver the finished note to Telegram itself (chunked). We do
       # NOT also send it here - that double-sent the briefing. On failure the wrapper alarms on the PC.
-      try { & (Join-Path $BIN 'jarvis-debrief.ps1') -Channel telegram | Out-Null }
+      try { & (Join-Path $BIN 'jarvis-debrief.ps1') -Channel telegram -OnDemand | Out-Null }
       catch { Send-Telegram -Text "The debrief run failed, Sir: $($_.Exception.Message)" -Cred $Cred | Out-Null }
     }
     'status' { Send-Telegram -Text (Get-StatusText) -Cred $Cred | Out-Null }
