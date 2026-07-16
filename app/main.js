@@ -248,7 +248,8 @@ async function readBriefingAloud() {
 
 function debriefNow() {
   showHud('Preparing a fresh debrief, Sir. Give me a minute or two.', { speak: true });
-  runPowerShell(path.join(BIN, 'jarvis-debrief.ps1'), [])
+  // -OnDemand: Alex asked for this one just now, so it must not be stamped a late 08:30 catch-up
+  runPowerShell(path.join(BIN, 'jarvis-debrief.ps1'), ['-OnDemand'])
     .then(() => showHud('Debrief refreshed and emailed, Sir.', { speak: true }))
     .catch(() => showHud('The debrief run failed, Sir. Check the log.', { kind: 'alert', speak: true }));
 }

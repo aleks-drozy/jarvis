@@ -1,7 +1,9 @@
 # skill/bin/jarvis-debrief.ps1 - run by Task Scheduler at 08:30 (or manually from a NORMAL terminal).
 # -Channel overrides where the finished note is delivered (telegram | email | both); default reads
 # CONFIG.md 'debrief_delivery' (falling back to email). The Telegram /debrief command passes 'telegram'.
-param([ValidateSet('telegram','email','both','')][string]$Channel = '')
+# -OnDemand marks a run Alex explicitly asked for (Telegram /debrief, tray "Debrief now") so it is not
+# judged against 08:30 and mis-stamped a late catch-up. The SCHEDULED task passes neither flag.
+param([ValidateSet('telegram','email','both','')][string]$Channel = '', [switch]$OnDemand)
 $ErrorActionPreference = 'Stop'
 $vault    = 'C:\Users\Alex\ObsidianVault\claude-memory\12-jarvis'
 $skillDir = Join-Path $HOME '.claude\skills\jarvis'
@@ -94,7 +96,9 @@ try {
   # the log - it must never masquerade as an on-time morning. Boot time after 08:30 proves the machine
   # was powered off (shutdown defeats the wake timer - witnessed 2026-07-14).
   $boot = (Get-CimInstance Win32_OperatingSystem).LastBootUpTime
-  $lateNote = Get-LatenessNote -RunStart $runStart -BootTime $boot
+  # -OnDemand runs are not the 08:30 run, so they are never judged late (Get-LatenessNote returns null
+  # and every downstream stamp - note footer, toast, log tag, email subject - degrades to "on time").
+  $lateNote = Get-LatenessNote -RunStart $runStart -BootTime $boot -OnDemand:$OnDemand
   if ($lateNote) { Add-Content -Encoding UTF8 -Path $note -Value "`n> $lateNote" }
 
   # Deliver per channel. Each delivery throws on failure so it is caught below (loud FAILED, never a
@@ -105,7 +109,7 @@ try {
     Send-DebriefTelegram -NotePath $note
   }
   if ($channel -eq 'email' -or $channel -eq 'both') {
-    Send-Debrief -NotePath $note -ToAddress $OwnerEmail -RunStart $runStart -BootTime $boot
+    Send-Debrief -NotePath $note -ToAddress $OwnerEmail -RunStart $runStart -BootTime $boot -OnDemand:$OnDemand
   }
   if ($lateNote) { Toast "Debrief ready (late catch-up), Sir." } else { Toast "Debrief ready, Sir." }
   $lateTag = ''; if ($lateNote) { $lateTag = ' [late catch-up]' }
