@@ -6,8 +6,9 @@ tracker in ~5s of model time. <b>Full trailer, sound on: <a href="docs/media/tra
 (arc-reactor cold open rendered frame-by-frame from the app's own UI) &#183; raw demo: <a href="docs/media/voice.mp4">voice.mp4</a></i></p>
 
 A butler-style personal AI assistant, built as a **Claude Code agent skill** plus a set of
-PowerShell automations. Every morning at 08:30 it researches my life and emails me a briefing.
-The rest of the day it answers on demand: budgeting, job hunting, project status, honest coaching.
+PowerShell automations. Every morning at 08:30 it researches my life and sends me a briefing on
+Telegram. The rest of the day it answers on demand, at the desk or from my phone: budgeting, job
+hunting, interview prep, project status, honest coaching.
 
 Built solo by [Aleksandrs Drozdovs](https://www.linkedin.com/in/aleksandrs-drozdovs-13b730331/),
 CS & Software Engineering graduate (Maynooth University, 2026), Dublin.
@@ -32,14 +33,22 @@ Windows Task Scheduler (08:30, catch-up if PC was off)
         |
 jarvis-debrief.ps1 ------- headless run guard: note must be FRESHLY written or no send
         |                                   |
-claude -p (agent skill) --> writes briefing --> send-debrief.ps1 --> Gmail SMTP --> my inbox
-   |         |                                                          (UTF-8, self-only)
+claude -p (agent skill) --> writes briefing --> delivery (CONFIG debrief_delivery, self-only)
+   |         |                                    |-- telegram-bot.ps1 -> Telegram -> my phone (chunked)
+   |         |                                    +-- send-debrief.ps1  -> Gmail SMTP -> my inbox
+   |         |
    |         +-- collect-activity.ps1   git discovery + commits + session activity (JSON)
    |         +-- search-jobs.ps1        Jooble/Adzuna job-board APIs (raw results; tiering is in the skill)
-   |         +-- check-job-mail.ps1     raw IMAP job-alert reader (headers only)
+   |         +-- check-job-mail.ps1     raw IMAP job-alert reader (headers only) + status classification
+   |         +-- get-bank-data.ps1      Enable Banking read-only aggregates
    |
    +-- skill/SKILL.md                   personality, intents, HARD safety rules
-   +-- skill/references/*.md            debrief procedure, job-hunter, finance-coach playbooks
+   +-- skill/references/*.md            debrief, job-hunter, interview-prep, finance-coach, fitness-log
+
+Windows Task Scheduler (every 3 min)
+        |
+telegram-bot.ps1 -Once --> /debrief · /status · "note <text>" · /notes
+        (one chat id only; a closed command whitelist, not a shell)
 ```
 
 ## Trust engineering (the part I care most about)
@@ -79,25 +88,34 @@ back on the HUD and spoken aloud (edge-tts). Mic capture lives in the always-res
 PCM -> 16 kHz WAV -> whisper-cli. One-time setup: `scripts/setup-whisper.ps1` (fetches the CLI +
 base.en model into a gitignored vendor dir).
 
-## Optional integrations (opt-in, off by default)
+## Telegram (where the briefing actually lands)
 
-Ships wired but **off** until I add my own credentials - the agent is not allowed to create accounts
-or hold tokens, so activation is a manual step.
+The 08:30 briefing is delivered to my phone over Telegram (`debrief_delivery: telegram | email | both`
+in CONFIG; long briefings are chunked rather than truncated). A scheduled poller runs
+`telegram-bot.ps1 -Once` every 3 minutes so I can also talk back:
 
-**Telegram remote.** A self-only bridge (`skill/bin/telegram-bot.ps1`) to trigger a debrief or check
-status from my phone, and to push application-status alerts (interview / offer / rejection, classified
-from the subject line only). It talks to exactly one chat id - mine - and the remote surface is
-deliberately narrow (`/debrief`, `/status`, `note <text>` to jot something down on the go, `/notes` to
-read them back); it is not a shell - a texted note is stored as data in the vault, never executed. To enable:
-1. `@BotFather` -> `/newbot`, message the bot once, then `telegram-bot.ps1 -StoreCredential`
-2. Set `telegram: on` in CONFIG.md. Poll with `-Once` (Task Scheduler) or `-Poll` (foreground).
+- `/debrief` - generate and send a fresh briefing now
+- `/status` - scheduler health, bank feed, whether today's briefing was written
+- `note <text>` (or `idea` / `remember` / `todo`) - jot something down when I'm out; it lands
+  timestamped in the vault and the next morning's briefing surfaces it for triage
+- `/notes` - read recent captures back
+
+**The design constraint that matters:** it talks to exactly one chat id (mine, enforced in code before
+the network call), and the remote surface is a **closed whitelist, not a shell**. Unknown text gets the
+help reply, never execution. A texted note is stored as data via `Add-Content`; `note delete everything`
+saves the string "delete everything" and does nothing else.
+
+Setup for a clone: `@BotFather` -> `/newbot`, message the bot once, `telegram-bot.ps1 -StoreCredential`
+(it refuses to bind an owner if more than one chat id has messaged the bot), set `telegram: on`, then
+`scripts/register-telegram-poller.ps1`.
 
 ## Stack
 
 Claude Code (agent skill + headless `claude -p` with a long-lived token), Windows PowerShell 5.1,
-Windows Task Scheduler, Gmail SMTP/IMAP, Jooble + Adzuna REST APIs, whisper.cpp (local STT),
-edge-tts (neural voice out), Obsidian (markdown vault) as the memory layer. Plain-assertion test
-scripts in `tests/` (no framework dependency).
+Windows Task Scheduler, Telegram Bot API (self-only remote), Gmail SMTP/IMAP, Enable Banking (PSD2,
+read-only), Jooble + Adzuna REST APIs, whisper.cpp (local STT), edge-tts (neural voice out), Electron
+(tray orb + HUD), Obsidian (markdown vault) as the memory layer. Plain-assertion test scripts in
+`tests/` (no framework dependency).
 
 ## Battle scars (real bugs shipped and fixed)
 
@@ -117,6 +135,19 @@ scripts in `tests/` (no framework dependency).
   down, not slept - no wake timer survives a shutdown. Instead of pretending, a late briefing now
   stamps itself: subject "(late 10:04)", note footer naming the cause (powered off vs asleep,
   derived from the boot time). A miss is allowed; a quiet miss is not.
+- **The worst one so far: I wrote a command injection into my own assistant.** Jarvis classifies
+  job-alert emails and pushes interview/rejection news to my phone. The push was built by
+  interpolating the email's *subject line* into a command string. An email subject is written by
+  whoever emails you, and both bash and PowerShell evaluate `$( )` inside a double-quoted argument.
+  A stranger could have emailed me a subject containing a command and my own machine would have run
+  it at 08:30, with no click from me. Every test passed; the feature worked perfectly. It was caught
+  by a review pass whose only job is to attack the diff, not by the tests. The rule it cost me:
+  **never build a command line out of data.** The push text is now composed inside the script, where
+  the subject is a variable and never a token a shell can parse.
+- A wake word built on a vendor's "free tier" that the vendor had discontinued two weeks earlier.
+  The signup page still exists; it just quietly wants a company email and a card now. Rather than pay
+  for a hobby feature or bolt on a heavier engine, the wake word was deleted the same day it shipped.
+  A free tier is a policy, not a guarantee - verify it is still alive at build time, not at research time.
 - GoCardless Bank Account Data - the vendor Phase 3 was built against - turned out to have quietly
   closed to new signups a year earlier. The product page still looks alive; only a specific "new
   signups disabled" URL admits it. Rebuilt the whole read-only feed against Enable Banking the same
