@@ -26,9 +26,15 @@ processes are deliberately avoided).
 
 ```powershell
 git clone https://github.com/aleks-drozy/jarvis && cd jarvis
-powershell -File install.ps1 -InitVault      # prompts for your paths + email, seeds a starter vault
-powershell -File scripts/register-task.ps1   # the 08:30 briefing (optional)
+powershell -File install.ps1 -InitVault              # prompts for your paths + email, seeds a starter vault
+claude setup-token                                   # prints a long-lived token...
+powershell -File skill/bin/store-claude-token.ps1    # ...paste it here (required for the headless briefing)
+powershell -File scripts/register-task.ps1           # the 08:30 briefing (optional)
 ```
+
+The token step is not optional if you want the unattended 08:30 briefing or the desktop chat: both call
+Claude headlessly and need that stored token to authenticate. `store-claude-token.ps1` writes it
+DPAPI-encrypted to `~/.jarvis/claude-token.xml` (never the repo/vault).
 
 Then talk to him: `/jarvis debrief` in Claude Code. Everything else is opt-in, each with its own
 one-time setup, all credentials DPAPI-encrypted outside the repo (see `DEPENDENCIES.md` for exactly
