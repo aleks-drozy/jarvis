@@ -37,10 +37,16 @@ if (-not (Test-Path $ConfigPath)) {
   if (-not $JobSearchDir) { $JobSearchDir = Read-Host ("Job-search dir (CV variants land here) [" + $d.job_search_dir + "]") }
   if (-not $JobSearchDir) { $JobSearchDir = $d.job_search_dir }
   if (-not $OwnerEmail)   { $OwnerEmail   = Read-Host 'Your email (the ONLY address Jarvis may ever send to; empty = email disabled)' }
+  # If a caller redirected the deploy with -TargetDir, RECORD it as skill_dir so the schedulers and the
+  # app (which all read config.skill_dir) point at where the skill was actually installed, not the default.
+  $skillDir = if ($TargetDir) { $TargetDir } else { $d.skill_dir }
+  # UTF8 (not ASCII): a Windows username or email with any non-ASCII character would be mangled to '?'
+  # by ASCII encoding, silently pointing every path at the wrong place. Both config loaders already
+  # strip the BOM that PS 5.1's -Encoding UTF8 prepends.
   [ordered]@{
     vault_path = $VaultPath; projects_root = $ProjectsRoot; job_search_dir = $JobSearchDir
-    skill_dir = $d.skill_dir; owner_email = $OwnerEmail; app_id = $d.app_id; roadmap_index = ''
-  } | ConvertTo-Json | Set-Content -Encoding ASCII $ConfigPath
+    skill_dir = $skillDir; owner_email = $OwnerEmail; app_id = $d.app_id; roadmap_index = ''
+  } | ConvertTo-Json | Set-Content -Encoding UTF8 $ConfigPath
   Write-Host "Wrote $ConfigPath"
 }
 $cfg = Get-JarvisConfig -Path $ConfigPath
