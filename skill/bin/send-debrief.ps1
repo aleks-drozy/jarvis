@@ -7,7 +7,11 @@ param(
   [switch]$DotSourceOnly
 )
 $ErrorActionPreference = 'Stop'
-$OwnerEmail = 'aleksandrs.drozdovs2005@gmail.com'   # Safety rule 2: the ONLY permitted recipient
+# Safety rule 2: the ONLY permitted recipient is the configured owner. Comes from ~/.jarvis/config.json
+# (never hardcoded - this repo is public and a fork must not inherit the maintainer's address). An
+# EMPTY owner_email means every send is refused: the lock fails CLOSED, never open.
+. "$PSScriptRoot\get-jarvis-config.ps1"
+$OwnerEmail = (Get-JarvisConfig).owner_email
 
 function Get-LatenessNote {
   # Design 8 honesty stamp: null when the run started on schedule (within grace); otherwise a
@@ -65,8 +69,12 @@ function Send-Debrief {
         [switch]$OnDemand)
   # Safety rule 2 (self-only): refuse ANY recipient other than the owner, BEFORE reading the
   # credential or touching the network. A prompt-injected Jarvis must not be able to exfiltrate.
+  # No configured owner = no permitted recipient at all (fail closed).
+  if (-not $OwnerEmail) {
+    throw "Safety rule 2 (self-only): no owner_email configured in ~/.jarvis/config.json - refusing every send."
+  }
   if ($ToAddress -ne $OwnerEmail) {
-    throw "Safety rule 2 (self-only): refusing to email '$ToAddress' - recipient is locked to $OwnerEmail."
+    throw "Safety rule 2 (self-only): refusing to email '$ToAddress' - recipient is locked to the configured owner."
   }
   $mail = Build-DebriefMail -NotePath $NotePath -ToAddress $ToAddress -RunStart $RunStart -BootTime $BootTime -OnDemand:$OnDemand
   $cred = Get-AppPassword

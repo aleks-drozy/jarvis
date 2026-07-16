@@ -1,14 +1,19 @@
 # skill/bin/collect-activity.ps1
 # Emits JSON of recent project activity for the Jarvis debrief (module 3).
-# Usage:  powershell -File collect-activity.ps1 -ProjectsDir C:/Users/Alex/Projects -SinceHours 24
+# Usage:  powershell -File collect-activity.ps1 [-ProjectsDir <path>] -SinceHours 24
+#         (default ProjectsDir comes from ~/.jarvis/config.json 'projects_root')
 #         powershell -File collect-activity.ps1 -DotSourceOnly   (loads functions only, for tests)
 param(
-  [string]$ProjectsDir = 'C:/Users/Alex/Projects',
+  [string]$ProjectsDir = '',
   [string]$TranscriptsDir = "$HOME/.claude/projects",
   [int]$SinceHours = 24,
   [switch]$DotSourceOnly
 )
 $ErrorActionPreference = 'Stop'
+if (-not $ProjectsDir) {
+  . "$PSScriptRoot\get-jarvis-config.ps1"
+  $ProjectsDir = (Get-JarvisConfig).projects_root
+}
 
 function Get-GitRepos {
   param([string]$Root, [int]$MaxDepth = 3)
