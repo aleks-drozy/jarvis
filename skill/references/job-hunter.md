@@ -5,11 +5,11 @@ Legal-first: jobs come from aggregator APIs via `bin/search-jobs.ps1` — **Joob
 NEVER scrape LinkedIn/Indeed directly — ToS violation, account-ban risk (see 2026 Proxycurl lawsuit).
 
 ## 1. Find roles ("find roles / find jobs / job search")
-1. Read `C:\Users\Alex\ObsidianVault\claude-memory\12-jarvis\JOB_SEARCH.md` — the "Search targets" list
+1. Read `{{VAULT}}\JOB_SEARCH.md` — the "Search targets" list
    holds the queries. If empty, propose defaults from the charter: "graduate software engineer",
    "junior software developer", "AI engineer", "project manager graduate" (all Where=Dublin) and confirm.
 2. For each target (max 4 per session), run:
-   `powershell -NoProfile -File C:\Users\Alex\.claude\skills\jarvis\bin\search-jobs.ps1 -What "<query>" -Where "Dublin"`
+   `powershell -NoProfile -File {{BIN}}\search-jobs.ps1 -What "<query>" -Where "Dublin"`
    (defaults: -Provider jooble -Country ie). If it throws "No key", give Alex the one-minute Jooble
    setup from the script header (register at jooble.org/api/about) and stop.
 3. Dedupe against the tracker (same company+role = skip; already-seen URLs = skip).
@@ -30,11 +30,11 @@ NEVER scrape LinkedIn/Indeed directly — ToS violation, account-ban risk (see 2
 ## 2. Prep an application ("apply to #N / prep the CV for X")
 1. Add a row to the tracker: Company | Role | link | today | status **Drafting**.
 2. CV: JARVIS tailors it directly (cv-adjuster app retired 2026-07-09). Master CVs live in
-   `C:\Users\Alex\Desktop\Job Search\` as print-ready HTML (open in browser, Ctrl+P, Save as PDF).
+   `{{JOB_SEARCH_DIR}}\` as print-ready HTML (open in browser, Ctrl+P, Save as PDF).
    Create a per-role variant there (`aleksandrs-cv-<company>-<role>.html`) reusing the existing
    design; emphasise per role; NEVER invent facts; NO em dashes anywhere (Alex's rule: they read as
    AI tells to hiring managers).
-3. Cover letter: write to `C:\Users\Alex\ObsidianVault\claude-memory\12-jarvis\outreach\<company>-<role>.md`
+3. Cover letter: write to `{{VAULT}}\outreach\<company>-<role>.md`
    stamped "REVIEW — NOT SENT" (Safety 3), naming which CV variant to attach. NO em dashes in letter
    bodies. NEVER submit or email it yourself.
 4. Alex clicks submit himself. When he says he applied, set status **Applied** + date, and set

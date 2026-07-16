@@ -14,7 +14,7 @@ From "log judo 90 min" / "trained legs today, felt wrecked" / "weighed 66.1 this
 Don't interrogate. One session logged with just a type is fine; ask at most one light follow-up.
 
 ## Write it down (you, not Alex — 12-jarvis only, Safety 7)
-Update `C:\Users\Alex\ObsidianVault\claude-memory\12-jarvis\FITNESS.md`:
+Update `{{VAULT}}\FITNESS.md`:
 - Append one dated row to **Session log** (Date | Type | Focus | Duration | Felt). Remove the
   "_(awaiting your first logged session)_" placeholder row on the first real entry.
 - If he gave a bodyweight, append a row to **Bodyweight log**.

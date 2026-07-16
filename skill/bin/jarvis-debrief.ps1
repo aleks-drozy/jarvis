@@ -5,8 +5,10 @@
 # judged against 08:30 and mis-stamped a late catch-up. The SCHEDULED task passes neither flag.
 param([ValidateSet('telegram','email','both','')][string]$Channel = '', [switch]$OnDemand)
 $ErrorActionPreference = 'Stop'
-$vault    = 'C:\Users\Alex\ObsidianVault\claude-memory\12-jarvis'
-$skillDir = Join-Path $HOME '.claude\skills\jarvis'
+. "$PSScriptRoot\get-jarvis-config.ps1"
+$jcfg     = Get-JarvisConfig
+$vault    = $jcfg.vault_path
+$skillDir = $jcfg.skill_dir
 $today    = Get-Date -Format 'yyyy-MM-dd'
 $note     = Join-Path $vault "debriefs\$today.md"
 $sender   = Join-Path $PSScriptRoot 'send-debrief.ps1'
@@ -57,6 +59,11 @@ try {
 
   $runStart = Get-Date
   "$($runStart.ToString('s')) run start" | Add-Content $log
+  # Version drift guard: the whole system rides on Claude Code's headless behavior, which can change
+  # under us (the --verbose requirement did exactly that once). Log the version as its OWN line so a
+  # stranger debugging a broken morning can see which Claude Code produced it. parseLogTail ignores
+  # non-"run" lines, so this is invisible to the health parser.
+  try { "$($runStart.ToString('s')) claude-version $((& claude --version 2>&1 | Select-Object -First 1))" | Add-Content $log } catch { }
 
   # Headless auth: feed Claude the long-lived subscription token created by 'claude setup-token'.
   # Stored DPAPI-encrypted at ~/.jarvis/claude-token.xml (never in the repo/vault).

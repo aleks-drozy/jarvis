@@ -22,7 +22,7 @@ Rough figures are fine. Never push for precision he doesn't have.
   balance / monthly costs; state the runway and the weekly ceiling that keeps 3+ months of runway.
 
 ## Write it down (you, not Alex)
-After any money conversation, update `C:\Users\Alex\ObsidianVault\claude-memory\12-jarvis\FINANCE.md`:
+After any money conversation, update `{{VAULT}}\FINANCE.md`:
 - Keep the structure: Goals / Snapshot table / Budget / Log.
 - Snapshot rows get today's date in "As of".
 - Append one dated line to the Log section recording what changed ("2026-07-09 - balance EUR 1500,

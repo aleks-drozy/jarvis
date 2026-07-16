@@ -1,4 +1,4 @@
-# tests/send-debrief.Tests.ps1 — mail-building only, no real send
+# tests/send-debrief.Tests.ps1 - mail-building only, no real send
 $ErrorActionPreference = 'Stop'
 . "$PSScriptRoot\..\skill\bin\send-debrief.ps1" -DotSourceOnly
 function Assert($c,$m){ if(-not $c){ Write-Error "FAIL: $m"; exit 1 } }
