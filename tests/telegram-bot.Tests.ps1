@@ -87,4 +87,42 @@ Assert ((Get-NotePayload 'idea a tool for X') -eq 'a tool for X') "idea payload"
 Assert ((Get-NotePayload 'remember to call mom') -eq 'to call mom') "remember payload"
 Assert ((Get-NotePayload 'note') -eq '') "bare note -> empty payload"
 
+# --- Select-ActionableUpdates: the 2026-07-16 bug. Four queued /debrief ran four full generations and
+# --- delivered four briefings minutes apart. Expensive commands must collapse; stale backlog must not fire.
+function U($id, $text, $date) { [pscustomobject]@{ UpdateId = $id; ChatId = 555; Text = $text; Date = $date } }
+$now   = Get-Date '2026-07-16T10:40:00'
+$fresh = $now.AddMinutes(-1)
+$stale = $now.AddMinutes(-30)
+
+# 1) the actual incident: 4x /debrief in one batch -> ONE run, and it is the most recent
+$b = @( (U 1 '/debrief' $fresh), (U 2 '/debrief' $fresh), (U 3 '/debrief' $fresh), (U 4 '/debrief' $fresh) )
+$act = @(Select-ActionableUpdates -Updates $b -Now $now -MaxAgeMinutes 10)
+Assert ($act.Count -eq 1) "4x /debrief collapses to 1 run, got $($act.Count)"
+Assert ($act[0].UpdateId -eq 4) "the LAST /debrief is the one that runs"
+
+# 2) notes must NOT collapse - each note is distinct data, losing one loses information
+$b = @( (U 1 'note a' $fresh), (U 2 'note b' $fresh), (U 3 'note c' $fresh) )
+$act = @(Select-ActionableUpdates -Updates $b -Now $now -MaxAgeMinutes 10)
+Assert ($act.Count -eq 3) "notes are never deduped, got $($act.Count)"
+
+# 3) stale backlog (e.g. laptop asleep, commands from 30 min ago) must not fire
+$b = @( (U 1 '/debrief' $stale), (U 2 'note old' $stale) )
+$act = @(Select-ActionableUpdates -Updates $b -Now $now -MaxAgeMinutes 10)
+Assert ($act.Count -eq 0) "stale updates are not acted on, got $($act.Count)"
+
+# 4) mixed batch: one debrief (the last), both notes, one status; order preserved
+$b = @( (U 1 '/debrief' $fresh), (U 2 'note x' $fresh), (U 3 '/debrief' $fresh), (U 4 '/status' $fresh), (U 5 'note y' $fresh) )
+$act = @(Select-ActionableUpdates -Updates $b -Now $now -MaxAgeMinutes 10)
+Assert ($act.Count -eq 4) "mixed batch -> 1 debrief + 2 notes + 1 status, got $($act.Count)"
+Assert (@($act | Where-Object { $_.UpdateId -eq 1 }).Count -eq 0) "the superseded first /debrief must not run"
+Assert (@($act | Where-Object { $_.UpdateId -eq 3 }).Count -eq 1) "the last /debrief runs"
+Assert ($act[0].UpdateId -lt $act[-1].UpdateId) "original order preserved"
+
+# 5) empty batch
+Assert ((@(Select-ActionableUpdates -Updates @() -Now $now -MaxAgeMinutes 10)).Count -eq 0) "empty -> empty"
+
+# 6) a missing date must NOT silently swallow a real command (act, don't drop)
+$b = @( (U 1 '/debrief' $null) )
+Assert ((@(Select-ActionableUpdates -Updates $b -Now $now -MaxAgeMinutes 10)).Count -eq 1) "unknown date -> still acted on"
+
 Write-Host "telegram-bot: ALL PASS"
