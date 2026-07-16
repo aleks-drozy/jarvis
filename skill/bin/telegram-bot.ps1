@@ -30,7 +30,8 @@ param(
 )
 $ErrorActionPreference = 'Stop'
 $BIN = $PSScriptRoot
-$VAULT = 'C:\Users\Alex\ObsidianVault\claude-memory\12-jarvis'
+. "$PSScriptRoot\get-jarvis-config.ps1"
+$VAULT = (Get-JarvisConfig).vault_path
 
 # ---------- pure helpers (unit-tested; no network) ----------
 

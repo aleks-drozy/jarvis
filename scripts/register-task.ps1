@@ -1,7 +1,13 @@
 # scripts/register-task.ps1 - registers/updates the daily 08:30 Jarvis debrief.
 # "only when logged on" + StartWhenAvailable => catches up a missed run at next logon AND toasts work.
+# The task runs the INSTALLED skill copy (config skill_dir), not the repo checkout: the repo may sit on
+# any work-in-progress branch, and the 08:30 run must never execute half-finished code. Run install.ps1
+# before this to deploy the current code.
 $ErrorActionPreference = 'Stop'
-$wrapper = 'C:\Users\Alex\Projects\jarvis\skill\bin\jarvis-debrief.ps1'
+. "$PSScriptRoot\..\skill\bin\get-jarvis-config.ps1"
+$cfg = Get-JarvisConfig
+$wrapper = Join-Path $cfg.skill_dir 'bin\jarvis-debrief.ps1'
+if (-not (Test-Path $wrapper)) { throw "no installed skill at $wrapper - run install.ps1 first" }
 $action  = New-ScheduledTaskAction -Execute 'powershell.exe' `
   -Argument "-NoProfile -WindowStyle Hidden -File `"$wrapper`""
 $trigger = New-ScheduledTaskTrigger -Daily -At 8:30am
@@ -17,5 +23,5 @@ $settings = New-ScheduledTaskSettingsSet -StartWhenAvailable -WakeToRun `
   -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries `
   -ExecutionTimeLimit (New-TimeSpan -Minutes 15)
 Register-ScheduledTask -TaskName 'Jarvis Morning Debrief' -Action $action -Trigger $trigger `
-  -Settings $settings -Description 'Generates and delivers Alex the morning debrief (Telegram/email per CONFIG debrief_delivery)' -Force
-Write-Host "Registered 'Jarvis Morning Debrief' at 08:30 (machine-local)."
+  -Settings $settings -Description 'Generates and delivers the morning debrief (Telegram/email per CONFIG debrief_delivery)' -Force
+Write-Host "Registered 'Jarvis Morning Debrief' at 08:30 (machine-local), running the installed skill copy."

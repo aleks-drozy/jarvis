@@ -13,6 +13,39 @@ hunting, interview prep, project status, honest coaching.
 Built solo by [Aleksandrs Drozdovs](https://www.linkedin.com/in/aleksandrs-drozdovs-13b730331/),
 CS & Software Engineering graduate (Maynooth University, 2026), Dublin.
 
+## Run it yourself
+
+Jarvis is built for one person per install - it reads YOUR vault, emails only YOU, and answers to
+your charter. Nothing in this repo carries my paths or my email (a guard test enforces it); the
+installer writes your own into `~/.jarvis/config.json` and renders the skill against them.
+
+**Requirements:** Windows 10/11, Windows PowerShell 5.1 (preinstalled), Node.js, git,
+[Claude Code](https://claude.com/claude-code) with a subscription (`claude setup-token` for the
+headless morning run), and ~8GB RAM (the reference machine is a 7.4GB laptop - heavy always-on
+processes are deliberately avoided).
+
+```powershell
+git clone https://github.com/aleks-drozy/jarvis && cd jarvis
+powershell -File install.ps1 -InitVault      # prompts for your paths + email, seeds a starter vault
+powershell -File scripts/register-task.ps1   # the 08:30 briefing (optional)
+```
+
+Then talk to him: `/jarvis debrief` in Claude Code. Everything else is opt-in, each with its own
+one-time setup, all credentials DPAPI-encrypted outside the repo (see `DEPENDENCIES.md` for exactly
+what data flows where): Gmail app password (inbox module + email delivery), a secret iCal URL
+(calendar), Jooble/Adzuna keys (job boards), a Telegram bot (`telegram-bot.ps1 -StoreCredential` +
+`scripts/register-telegram-poller.ps1`), Enable Banking (`setup-bank.ps1`, read-only), whisper.cpp
+(`scripts/setup-whisper.ps1`) + `pip install edge-tts` (voice), and the desktop app (`cd app && npm
+install && npm start`). Each module degrades gracefully when unconfigured - the briefing simply says
+what is not connected. Personalize the voice by copying `skill/templates/SOUL.template.md` (and
+TASTE) into your vault: a fork should sound like its owner, not like me.
+
+**Model/cost note:** the desktop chat deliberately runs a fast model (sonnet); the daily briefing
+uses your Claude Code default. One briefing plus casual chat fits comfortably inside a normal Claude
+subscription; there is no metering built in. Claude Code's headless behavior can change between
+versions (it has once - see battle scars); the briefing logs `claude --version` on every run so a
+broken morning is diagnosable.
+
 ## What it does, unattended, every morning
 
 - Discovers git repos recursively and reports yesterday's commits (with hashes; every claim in a
@@ -159,9 +192,23 @@ read-only), Jooble + Adzuna REST APIs, whisper.cpp (local STT), edge-tts (neural
 
 ## Layout
 
-- `skill/` - the Claude agent skill (installed to `~/.claude/skills/jarvis` via `install.ps1`)
-- `skill/bin/` - PowerShell collectors, senders, scheduler wrapper
-- `scripts/` - Task Scheduler registration
-- `tests/` - assertion tests (`powershell -File tests/<name>.Tests.ps1`)
+- `skill/` - the Claude agent skill; `install.ps1` renders `{{VAULT}}`-style placeholders with your
+  configured paths and mirrors it to `~/.claude/skills/jarvis`
+- `skill/bin/` - PowerShell collectors, senders, the scheduler wrapper (all read `~/.jarvis/config.json`)
+- `skill/templates/` - SOUL/TASTE identity templates to copy into your vault and make yours
+- `app/` - the Electron companion (tray, Orb, Summon HUD, dashboard)
+- `scripts/` - Task Scheduler registration + one-time setup helpers
+- `tests/` - plain-assertion tests (`powershell -File tests/<name>.Tests.ps1`), run by CI on every push;
+  includes a guard test that fails the build if a personal path or email ever lands in tracked source
 
-Personal memory (goals, trackers, briefings) lives in a private Obsidian vault, not in this repo.
+Personal memory (goals, trackers, briefings) lives in a private vault OUTSIDE this repo, and secrets
+live DPAPI-encrypted in `~/.jarvis/` - neither is ever committed. See `SECURITY.md` for reporting,
+`CONTRIBUTING.md` before opening a PR, `DEPENDENCIES.md` for what each integration can see.
+
+## Versioning & maturity
+
+Semantic versioning from **v3.0.0** (this repo tagged v2.0 before adopting semver; v3 is the
+config-file breaking change). Feature maturity is tiered honestly: **battle-tested** (morning
+briefing, job-mail classification, Telegram bridge, the safety locks - all have survived real
+incidents documented above) / **works, lightly used** (bank feed, fitness log, interview prep,
+voice) / **experimental** (proactivity gate, Sunday retrospective - instruction-level, tuned by use).
