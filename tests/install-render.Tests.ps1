@@ -40,6 +40,30 @@ try {
   $dstBot = Get-Content (Join-Path $target 'bin\telegram-bot.ps1') -Raw
   Assert ($srcBot -eq $dstBot) "bin/*.ps1 are copied verbatim, never templated"
 
+  # FIRST-TIME setup (no pre-existing config) with -TargetDir must PERSIST it as skill_dir, so the
+  # schedulers + app (which read config.skill_dir) point at the actual deploy dir. Regression for the
+  # review finding where -TargetDir redirected the deploy but left skill_dir at the HOME default.
+  $freshCfg = Join-Path $tmp 'fresh-config.json'
+  $freshTarget = Join-Path $tmp 'fresh-target'
+  & powershell -NoProfile -ExecutionPolicy Bypass -File (Join-Path $repo 'install.ps1') `
+      -ConfigPath $freshCfg -TargetDir $freshTarget `
+      -VaultPath $vault -ProjectsRoot (Join-Path $tmp 'proj') -JobSearchDir (Join-Path $tmp 'jobs') -OwnerEmail 's@example.com' | Out-Null
+  Assert ($LASTEXITCODE -eq 0) "first-time install with params exits 0"
+  $written = Get-Content $freshCfg -Raw | ConvertFrom-Json
+  Assert ($written.skill_dir -eq $freshTarget) "-TargetDir on first run is persisted as skill_dir (got '$($written.skill_dir)')"
+  Assert (Test-Path (Join-Path $freshTarget 'SKILL.md')) "skill actually deployed to -TargetDir"
+
+  # config is UTF8 (not ASCII): a non-ASCII value must survive the round-trip, not become '?'.
+  # Build the accented name from a codepoint so THIS test file stays pure ASCII (PS 5.1 reads .ps1 as ANSI).
+  $accented = 'Jos' + [char]0x00E9 + '-vault'   # "Jose-vault" with an e-acute
+  $utf8Cfg = Join-Path $tmp 'utf8-config.json'
+  & powershell -NoProfile -ExecutionPolicy Bypass -File (Join-Path $repo 'install.ps1') `
+      -ConfigPath $utf8Cfg -TargetDir $freshTarget `
+      -VaultPath (Join-Path $tmp $accented) -ProjectsRoot (Join-Path $tmp 'p') -JobSearchDir (Join-Path $tmp 'j') -OwnerEmail 's@example.com' | Out-Null
+  $u = Get-Content $utf8Cfg -Raw -Encoding UTF8 | ConvertFrom-Json
+  Assert ($u.vault_path -notmatch '\?') "non-ASCII path in config survives (not mangled to '?')"
+  Assert ($u.vault_path.Contains([char]0x00E9)) "the exact non-ASCII char round-trips through config.json"
+
   # -InitVault seeds a usable vault skeleton for a stranger
   & powershell -NoProfile -ExecutionPolicy Bypass -File (Join-Path $repo 'install.ps1') `
       -ConfigPath $cfgPath -TargetDir $target -InitVault | Out-Null
