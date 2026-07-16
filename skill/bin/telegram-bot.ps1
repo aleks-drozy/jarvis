@@ -66,18 +66,53 @@ function Test-TelegramSenderAllowed {
 }
 
 function Parse-TelegramUpdates {
-  # getUpdates JSON -> flat list of {UpdateId, ChatId, Text}. Tolerates missing message/chat/text and
-  # edited messages. Returns the List so callers wrap with @() and enumerate (empty stays 0-count).
+  # getUpdates JSON -> flat list of {UpdateId, ChatId, Text, Date}. Tolerates missing message/chat/text/
+  # date and edited messages. Date (from Telegram's unix `date`) is what lets us ignore a stale backlog.
+  # Returns the List so callers wrap with @() and enumerate (empty stays 0-count).
   param($Response)
   $out = New-Object System.Collections.Generic.List[object]
   if ($null -eq $Response -or -not $Response.ok -or $null -eq $Response.result) { return $out }
   foreach ($u in $Response.result) {
     $msg = $u.message
     if ($null -eq $msg) { $msg = $u.edited_message }
-    $chatId = $null; $text = $null
+    $chatId = $null; $text = $null; $date = $null
     if ($msg -and $msg.chat) { $chatId = $msg.chat.id }
-    if ($msg) { $text = $msg.text }
-    $out.Add([pscustomobject]@{ UpdateId = [long]$u.update_id; ChatId = $chatId; Text = $text })
+    if ($msg) {
+      $text = $msg.text
+      if ($msg.date) { try { $date = [DateTimeOffset]::FromUnixTimeSeconds([long]$msg.date).LocalDateTime } catch { $date = $null } }
+    }
+    $out.Add([pscustomobject]@{ UpdateId = [long]$u.update_id; ChatId = $chatId; Text = $text; Date = $date })
+  }
+  return $out
+}
+
+function Select-ActionableUpdates {
+  # Decide which of a fetched batch should ACTUALLY run. Fixes the 2026-07-16 incident: four queued
+  # /debrief commands each ran a full ~3-minute generation and delivered four briefings minutes apart.
+  # Two rules:
+  #   1. STALENESS - a backlog older than MaxAgeMinutes is not acted on. After the laptop sleeps, the
+  #      queue holds commands from ages ago; Alex does not want a briefing he asked for 40 minutes back.
+  #   2. COLLAPSE - repeat/idempotent commands (debrief, status, help) keep only the LAST occurrence.
+  #      Running /debrief four times produces four identical briefings and ~12 minutes of work.
+  # Notes are NEVER collapsed: each note is distinct data and dropping one loses information.
+  # An update with an unknown date is acted on (dropping a real command silently is the worse failure).
+  param($Updates, [datetime]$Now, [int]$MaxAgeMinutes = 10)
+  $fresh = New-Object System.Collections.Generic.List[object]
+  foreach ($u in $Updates) {
+    if ($null -ne $u.Date -and $u.Date -lt $Now.AddMinutes(-$MaxAgeMinutes)) { continue }   # stale
+    $fresh.Add($u)
+  }
+  # keep the LAST update per collapsible command; keep every note
+  $lastOf = @{}
+  foreach ($u in $fresh) {
+    $cmd = Resolve-TelegramCommand $u.Text
+    if ($cmd -ne 'note') { $lastOf[$cmd] = $u.UpdateId }
+  }
+  $out = New-Object System.Collections.Generic.List[object]
+  foreach ($u in $fresh) {
+    $cmd = Resolve-TelegramCommand $u.Text
+    if ($cmd -eq 'note') { $out.Add($u); continue }
+    if ($lastOf[$cmd] -eq $u.UpdateId) { $out.Add($u) }   # superseded duplicates are dropped
   }
   return $out
 }
@@ -225,7 +260,7 @@ function Invoke-TelegramCommand {
       Send-Telegram -Text 'On it, Sir. Generating your debrief now - it will arrive here shortly.' -Cred $Cred | Out-Null
       # -Channel telegram makes the wrapper deliver the finished note to Telegram itself (chunked). We do
       # NOT also send it here - that double-sent the briefing. On failure the wrapper alarms on the PC.
-      try { & (Join-Path $BIN 'jarvis-debrief.ps1') -Channel telegram | Out-Null }
+      try { & (Join-Path $BIN 'jarvis-debrief.ps1') -Channel telegram -OnDemand | Out-Null }
       catch { Send-Telegram -Text "The debrief run failed, Sir: $($_.Exception.Message)" -Cred $Cred | Out-Null }
     }
     'status' { Send-Telegram -Text (Get-StatusText) -Cred $Cred | Out-Null }
@@ -253,17 +288,22 @@ function Invoke-PollOnce {
   if ($offset) { $body.offset = $offset }
   $resp = Invoke-TelegramApi -Token $Cred.Token -Method 'getUpdates' -Body $body
   $ups = @(Parse-TelegramUpdates $resp)
+  # Collapse repeats + ignore a stale backlog BEFORE doing any work (see Select-ActionableUpdates).
+  $act = @{}
+  foreach ($a in @(Select-ActionableUpdates -Updates $ups -Now (Get-Date) -MaxAgeMinutes 10)) { $act[[string]$a.UpdateId] = $true }
+  $handled = 0
   foreach ($u in $ups) {
-    if (Test-TelegramSenderAllowed $u.ChatId $Cred.ChatId) {
-      # A failed command must NOT abort the batch: an escaping throw would skip Write-Offset and make
-      # the next poll replay the whole batch (duplicate debriefs/emails). Catch and drop; never retry.
-      try { Invoke-TelegramCommand -Command (Resolve-TelegramCommand $u.Text) -Text $u.Text -Cred $Cred }
-      catch { Write-Warning "command failed (dropped, not retried): $($_.Exception.Message)" }
-    }   # messages from any other chat id are silently ignored (self-only)
+    # CONSUME FIRST (at-most-once). /debrief takes ~3 minutes; if this process is killed mid-command
+    # (ExecutionTimeLimit, sleep, reboot) an offset written only at the END of the batch means the whole
+    # batch REPLAYS on the next poll - forever. That is the 2026-07-16 duplicate-briefing incident.
+    # Losing one command to a crash is strictly better than delivering it five times.
+    Write-Offset ($u.UpdateId + 1)
+    if (-not (Test-TelegramSenderAllowed $u.ChatId $Cred.ChatId)) { continue }   # self-only
+    if (-not $act.ContainsKey([string]$u.UpdateId)) { continue }                 # stale or superseded
+    try { Invoke-TelegramCommand -Command (Resolve-TelegramCommand $u.Text) -Text $u.Text -Cred $Cred; $handled++ }
+    catch { Write-Warning "command failed (dropped, not retried): $($_.Exception.Message)" }
   }
-  $next = Get-NextOffset $ups
-  if ($next) { Write-Offset $next }
-  return $ups.Count
+  return $handled
 }
 
 if ($DotSourceOnly) { return }

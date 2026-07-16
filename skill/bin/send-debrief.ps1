@@ -1,6 +1,6 @@
 # skill/bin/send-debrief.ps1
 # Sends today's debrief note to Alex via Gmail SMTP (app password from a DPAPI-encrypted PSCredential).
-# Recipient is LOCKED to Alex's own address — Safety rule 2 (self-only), enforced in code below.
+# Recipient is LOCKED to Alex's own address - Safety rule 2 (self-only), enforced in code below.
 param(
   [string]$NotePath,
   [string]$ToAddress,
@@ -14,8 +14,16 @@ function Get-LatenessNote {
   # one-line factual stamp naming the actual time AND the cause. BootTime after the scheduled
   # moment proves the machine was powered off at 08:30 (a shutdown defeats the wake timer -
   # witnessed 2026-07-14); otherwise it was asleep/logged off and caught up at logon.
+  #
+  # -OnDemand: this run was explicitly requested (Telegram /debrief, the tray's "Debrief now"), so it is
+  # NOT the 08:30 run and must not be judged against it. Stamping a briefing Alex asked for at 10:40 as
+  # a "late catch-up ... the machine was powered off at 08:30" puts a false claim in his own notes.
+  # The default deliberately stays "judge it": if a caller forgets the flag the worst case is a spurious
+  # stamp (harmless noise), whereas defaulting the other way would silently drop the honesty stamp - and
+  # that stamp exists precisely so a missed morning cannot masquerade as a quiet one.
   param([datetime]$RunStart, [datetime]$BootTime = [datetime]::MinValue,
-        [string]$ScheduledAt = '08:30', [int]$GraceMinutes = 10)
+        [string]$ScheduledAt = '08:30', [int]$GraceMinutes = 10, [switch]$OnDemand)
+  if ($OnDemand) { return $null }
   $sched = [datetime]::ParseExact($RunStart.ToString('yyyy-MM-dd') + ' ' + $ScheduledAt,
     'yyyy-MM-dd HH:mm', [Globalization.CultureInfo]::InvariantCulture)
   if ($RunStart -le $sched.AddMinutes($GraceMinutes)) { return $null }
@@ -28,7 +36,8 @@ function Get-LatenessNote {
 
 function Build-DebriefMail {
   param([string]$NotePath, [string]$ToAddress,
-        [datetime]$RunStart = [datetime]::MinValue, [datetime]$BootTime = [datetime]::MinValue)
+        [datetime]$RunStart = [datetime]::MinValue, [datetime]$BootTime = [datetime]::MinValue,
+        [switch]$OnDemand)
   $body = Get-Content -LiteralPath $NotePath -Raw -Encoding UTF8
   # strip the YAML frontmatter block so the email opens at the greeting, not "--- project: ..."
   $body = [regex]::Replace($body, '(?s)\A\s*---\r?\n.*?\r?\n---\r?\n', '').TrimStart()
@@ -36,7 +45,7 @@ function Build-DebriefMail {
   $subject = "[JARVIS] Morning debrief - $date"
   # Late catch-up is flagged in the subject so a missed 08:30 is loud in the inbox, not invisible.
   if ($RunStart -ne [datetime]::MinValue) {
-    if (Get-LatenessNote -RunStart $RunStart -BootTime $BootTime) {
+    if (Get-LatenessNote -RunStart $RunStart -BootTime $BootTime -OnDemand:$OnDemand) {
       $subject = $subject + ' (late ' + $RunStart.ToString('HH:mm') + ')'
     }
   }
@@ -52,13 +61,14 @@ function Get-AppPassword {
 
 function Send-Debrief {
   param([string]$NotePath, [string]$ToAddress = $OwnerEmail,
-        [datetime]$RunStart = [datetime]::MinValue, [datetime]$BootTime = [datetime]::MinValue)
+        [datetime]$RunStart = [datetime]::MinValue, [datetime]$BootTime = [datetime]::MinValue,
+        [switch]$OnDemand)
   # Safety rule 2 (self-only): refuse ANY recipient other than the owner, BEFORE reading the
   # credential or touching the network. A prompt-injected Jarvis must not be able to exfiltrate.
   if ($ToAddress -ne $OwnerEmail) {
     throw "Safety rule 2 (self-only): refusing to email '$ToAddress' - recipient is locked to $OwnerEmail."
   }
-  $mail = Build-DebriefMail -NotePath $NotePath -ToAddress $ToAddress -RunStart $RunStart -BootTime $BootTime
+  $mail = Build-DebriefMail -NotePath $NotePath -ToAddress $ToAddress -RunStart $RunStart -BootTime $BootTime -OnDemand:$OnDemand
   $cred = Get-AppPassword
   Send-MailMessage -From $cred.UserName -To $mail.To -Subject $mail.Subject -Body $mail.Body `
     -SmtpServer 'smtp.gmail.com' -Port 587 -UseSsl -Credential $cred -Encoding ([System.Text.Encoding]::UTF8)

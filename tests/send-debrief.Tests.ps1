@@ -36,11 +36,24 @@ $off = Get-LatenessNote -RunStart (Get-Date '2026-07-14 10:04:31') -BootTime (Ge
 Assert ($off -match 'powered off|shut') "boot-after-08:30 lateness must name the shutdown"
 Assert ($off -match '10:04') "late stamp must carry the actual generation time"
 
+# An ON-DEMAND run (Telegram /debrief, tray "Debrief now") is not the 08:30 run and must never be judged
+# against it. Alex asked for it at 10:40, so "late catch-up - the machine was powered off at 08:30" is a
+# false claim in his own notes. Found 2026-07-16.
+$onDemand = Get-LatenessNote -RunStart (Get-Date '2026-07-16 10:40:00') -BootTime (Get-Date '2026-07-16 09:58:00') -OnDemand
+Assert ($null -eq $onDemand) "an on-demand run must never be stamped late - he asked for it just now"
+# ...but the DEFAULT still judges. A forgotten flag then yields a spurious stamp (harmless) rather than
+# silently dropping the honesty stamp, which is the whole reason it exists.
+$stillJudged = Get-LatenessNote -RunStart (Get-Date '2026-07-16 10:40:00') -BootTime (Get-Date '2026-07-16 09:58:00')
+Assert ($null -ne $stillJudged) "default (no -OnDemand) must STILL judge lateness - fail loud, never silent"
+
 # Late subject: the email itself must be visibly flagged, so a late morning is loud in the inbox
 $mailLate = Build-DebriefMail -NotePath $tmp -ToAddress 'me@example.com' -RunStart (Get-Date '2026-07-08 10:04:31') -BootTime (Get-Date '2026-07-08 09:58:00')
 Assert ($mailLate.Subject -match '\(late 10:04\)') "late run must be visible in the subject (got: $($mailLate.Subject))"
 $mailOn = Build-DebriefMail -NotePath $tmp -ToAddress 'me@example.com' -RunStart (Get-Date '2026-07-08 08:30:05') -BootTime (Get-Date '2026-07-08 07:00:00')
 Assert (-not ($mailOn.Subject -match 'late')) "on-time run must not be flagged late"
+# the email path must honour -OnDemand too, or a requested briefing arrives subject-tagged "(late)"
+$mailOnDemand = Build-DebriefMail -NotePath $tmp -ToAddress 'me@example.com' -RunStart (Get-Date '2026-07-08 10:04:31') -BootTime (Get-Date '2026-07-08 09:58:00') -OnDemand
+Assert (-not ($mailOnDemand.Subject -match 'late')) "on-demand run must not be flagged late in the subject (got: $($mailOnDemand.Subject))"
 
 Remove-Item $tmp -Force
 Write-Host "send-debrief: ALL PASS"
