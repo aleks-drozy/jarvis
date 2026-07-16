@@ -10,7 +10,11 @@ const CHAT_LOG = path.join(__dirname, '..', 'chat-timing.log');
 function tlog(msg) {
   try { fs.appendFileSync(CHAT_LOG, new Date().toISOString().slice(11, 19) + ' ' + msg + '\n'); } catch {}
 }
-const VAULT = 'C:/Users/Alex/ObsidianVault/claude-memory/12-jarvis';
+// machine/person-specific values from ~/.jarvis/config.json (see lib/config.js). Forward slashes in
+// the persona strings: the paths are quoted into Bash-run commands, where backslashes get eaten.
+const jarvisConfig = require('./config')();
+const VAULT = String(jarvisConfig.vault_path).replace(/\\/g, '/');
+const SKILL_BIN = String(jarvisConfig.skill_dir).replace(/\\/g, '/') + '/bin';
 // persona is computed per spawn so today's briefing path is always current
 function persona() {
   const d = new Date();
@@ -21,7 +25,7 @@ function persona() {
     'Be FAST: read only files each request needs; act (write your usual vault files per your rules). ' +
     `GROUNDING (hard rule): never claim a module, calendar, or tracker is missing/unconnected without reading it. ` +
     `Today is ${iso}. For today/schedule/plan questions read ${VAULT}/debriefs/${iso}.md FIRST; ` +
-    `live calendar if needed: run via Bash: powershell -NoProfile -File C:/Users/Alex/.claude/skills/jarvis/bin/get-calendar.ps1. ` +
+    `live calendar if needed: run via Bash: powershell -NoProfile -File ${SKILL_BIN}/get-calendar.ps1. ` +
     `Trackers live in ${VAULT} (JOB_SEARCH.md, FINANCE.md, LEDGER.md). Cite what you read. ` +
     'REPLY FORMAT (hard rule - the app parses it): EXACTLY two lines. ' +
     'Line 1: "SPOKEN: " then your natural butler reply, 1-2 short sentences, read aloud to Alex. ' +

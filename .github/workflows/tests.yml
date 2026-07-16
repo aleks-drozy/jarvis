@@ -1,0 +1,50 @@
+# CI: run the full plain-assertion suite on every push/PR, on the platform Jarvis actually targets
+# (Windows PowerShell 5.1). Also scans the repo + full git history for leaked secrets.
+name: tests
+on:
+  push:
+    branches: [master]
+  pull_request:
+
+jobs:
+  tests:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+      # tray-icons test runs app/scripts/gen-tray-icons.js which needs pngjs only (NOT electron -
+      # no reason to pull a ~200MB browser onto CI for a PNG check)
+      - name: Install pngjs for the icon test
+        run: npm install pngjs --no-save
+        working-directory: app
+      - name: PowerShell test suite (Windows PowerShell 5.1)
+        shell: powershell
+        run: |
+          $ErrorActionPreference = 'Continue'
+          $failed = @()
+          # stt.Tests.ps1 is excluded ON CI ONLY: it exercises a real whisper.cpp binary + model that
+          # scripts/setup-whisper.ps1 downloads locally (~150MB) - a deliberate, documented exclusion,
+          # not a silent skip. Everything else runs, including the no-personal-values guard.
+          $skip = @('stt.Tests.ps1')
+          foreach ($t in Get-ChildItem tests -Filter *.Tests.ps1) {
+            if ($skip -contains $t.Name) { Write-Host "SKIP  $($t.Name) (needs local whisper vendor dir)"; continue }
+            $out = & powershell -NoProfile -ExecutionPolicy Bypass -File $t.FullName 2>&1
+            if ($out -match 'ALL PASS') { Write-Host "PASS  $($t.Name)" }
+            else { Write-Host "FAIL  $($t.Name)"; $out | ForEach-Object { Write-Host "      $_" }; $failed += $t.Name }
+          }
+          if ($failed.Count -gt 0) { Write-Error ("failed: " + ($failed -join ', ')); exit 1 }
+          Write-Host "all PowerShell suites green"
+      - name: Node test suite
+        run: node tests/livestate.node.js
+
+  secret-scan:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0   # scan the FULL history, not just the tip
+      - uses: gitleaks/gitleaks-action@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

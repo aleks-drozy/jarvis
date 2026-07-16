@@ -7,7 +7,7 @@ the room is the worst possible outcome. Honest-butler voice throughout: tell him
 oversold, don't cheerlead.
 
 ## 1. Scope the interview (read before talking)
-1. `C:\Users\Alex\ObsidianVault\claude-memory\12-jarvis\JARVIS.md` — his story: Maynooth CS & Software
+1. `{{VAULT}}\JARVIS.md` — his story: Maynooth CS & Software
    Engineering **2.1 (2026)**; **DLT Capital, Quantitative Researcher & Software Engineer** (Feb–Jun 2025,
    ~$15k live trading P&L; manager/reference **Phil Maguire**, pre-approved). Stack: Next.js / Supabase / Vercel.
 2. `JOB_SEARCH.md` — which role this is (company, title, stage, seniority tier). If a CV variant or cover
@@ -73,7 +73,7 @@ Run it live, one question at a time:
 Keep score lightly; end with the 2–3 things to fix before the real thing.
 
 ## 5. Save it (12-jarvis only — Safety 7)
-Write the prep sheet to `C:\Users\Alex\ObsidianVault\claude-memory\12-jarvis\interview-prep\<company>-<role>.md`
+Write the prep sheet to `{{VAULT}}\interview-prep\<company>-<role>.md`
 (create the folder if absent). This is Alex's own study material, local — **not** third-party content, so no
 REVIEW stamp. Never record anything sensitive pulled from email bodies (Safety 5). Bump nothing else; this
 folder is his.

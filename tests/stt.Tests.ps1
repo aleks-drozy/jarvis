@@ -1,4 +1,4 @@
-# tests/stt.Tests.ps1 — voice input pipeline: local whisper must transcribe a known sample.
+# tests/stt.Tests.ps1 - voice input pipeline: local whisper must transcribe a known sample.
 # Requires scripts/setup-whisper.ps1 to have run (CLI + model + jfk.wav in app/vendor/whisper).
 $ErrorActionPreference = 'Stop'
 function Assert($c,$m){ if(-not $c){ Write-Error "FAIL: $m"; exit 1 } }

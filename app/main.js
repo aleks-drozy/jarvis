@@ -5,9 +5,12 @@ const { app, Tray, Menu, BrowserWindow, ipcMain, nativeImage, screen, shell, glo
 const path = require('path');
 const fs = require('fs');
 
-const VAULT = 'C:/Users/Alex/ObsidianVault/claude-memory/12-jarvis';
-const ROADMAP_INDEX = 'C:/Users/Alex/ObsidianVault/Life Roadmap 2026-2027/_INDEX.md';
-const BIN = path.join(process.env.USERPROFILE, '.claude', 'skills', 'jarvis', 'bin');
+// machine/person-specific values come from ~/.jarvis/config.json (single source of truth; a corrupt
+// file throws here on purpose - a visible startup failure beats silently pointing at the wrong vault)
+const jarvisConfig = require('./lib/config')();
+const VAULT = jarvisConfig.vault_path;
+const ROADMAP_INDEX = jarvisConfig.roadmap_index;   // optional; '' disables the dashboard roadmap read
+const BIN = path.join(jarvisConfig.skill_dir, 'bin');
 const APP_CONFIG = path.join(__dirname, 'app-config.json');
 
 const { runPowerShell, runCollector } = require('./lib/run');
@@ -408,7 +411,7 @@ function registerIpc() {
 const gotLock = app.requestSingleInstanceLock();
 if (!gotLock) app.quit();
 else {
-  app.setAppUserModelId('com.alexdrozdovs.jarvis');   // R-C: required for Windows notifications
+  app.setAppUserModelId(jarvisConfig.app_id);   // R-C: required for Windows notifications
   app.whenReady().then(() => {
     // mic only, and only for our own file:// renderers (voice input lives in the orb)
     session.defaultSession.setPermissionRequestHandler((_wc, permission, cb) => cb(permission === 'media'));
