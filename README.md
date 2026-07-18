@@ -10,7 +10,7 @@ PowerShell automations. Every morning at 08:30 it researches my life and sends m
 Telegram. The rest of the day it answers on demand, at the desk or from my phone: budgeting, job
 hunting, interview prep, project status, honest coaching.
 
-Built solo by [Aleksandrs Drozdovs](https://www.linkedin.com/in/aleksandrs-drozdovs-13b730331/),
+Built solo by [Aleksandrs Drozdovs](https://www.linkedin.com/in/aleksandrsdrozdovs/),
 CS & Software Engineering graduate (Maynooth University, 2026), Dublin.
 
 ## Run it yourself
