@@ -365,19 +365,27 @@ Assert ($allowOccurrences -eq 1) "exactly one --allowedTools in telegram-chat.ps
 
 # --strict-mcp-config must be present ON THE INVOCATION ITSELF, not merely anywhere in the file - a
 # bare substring match would also pass if the flag only showed up in a comment or an unrelated
-# string. Isolate the actual claude invocation block (from the call operator through the discarded
-# stderr redirect that ends it) and require the flag inside THAT block.
+# string. Isolate the actual claude invocation block and require the flag inside THAT block.
 # --- Prompt-marshalling fix, guard repair 1: the block regex used to be terminated by a bare
 # --- '2>$null', and there are three of those in the file. Deleting the redirect from the claude line
 # --- did NOT fail .Success - the lazy match simply ran on to the taskkill '2>$null' further down and
 # --- the block grew from 227 to 1238 characters, swallowing the whole timeout/tree-kill region. Every
 # --- flag assertion below then still passed on that widened block, so the "the flag is ON THE
 # --- INVOCATION, not merely somewhere in the file" property those assertions exist to provide was
-# --- destroyed while this suite stayed green. Anchor the terminator to the invocation's OWN tail so
-# --- dropping the stderr redirect (itself a real regression - see the stderr-discard property below)
-# --- fails loudly here instead.
-$invocationBlock = [regex]::Match($chatSrc, '&\s*claude\s+(?:-p|--print)\b[\s\S]*?--output-format\s+text\s+2>\$null')
-Assert ($invocationBlock.Success) "could not locate the claude invocation block in telegram-chat.ps1 (it must end with --output-format text 2>`$null)"
+# --- destroyed while this suite stayed green.
+# --- Early-close fix: the invocation is no longer a native call with a trailing '2>$null' to anchor
+# --- to. The prompt is now written to the child's stdin through System.Diagnostics.Process so that
+# --- the write is OBSERVABLE (a native pipeline reports nothing at all when the child stops reading
+# --- early - see the delivery-verification section below), and the flags travel as a token array.
+# --- The block is therefore anchored at BOTH ends on things that must exist for the invocation to
+# --- happen at all: the array that carries every flag, through the Process.Start that consumes it.
+# --- Both anchors are load-bearing, so neither can be deleted to widen the block.
+$invocationBlock = [regex]::Match($chatSrc, '\$claudeArgs\s*=\s*@\([\s\S]*?\[System\.Diagnostics\.Process\]::Start\(\$psi\)')
+Assert ($invocationBlock.Success) "could not locate the claude invocation block in telegram-chat.ps1 (`$claudeArgs = @( ... ) through [System.Diagnostics.Process]::Start(`$psi))"
+# exactly one such block may exist, or every assertion below could be pointed at a sanctioned decoy
+# while a second, wider invocation shipped alongside it
+$claudeArgsCount = ([regex]::Matches($chatSrc, '\$claudeArgs\s*=\s*@\(')).Count
+Assert ($claudeArgsCount -eq 1) "exactly one `$claudeArgs assignment may exist in telegram-chat.ps1, found $claudeArgsCount"
 Assert ($invocationBlock.Value -match '--strict-mcp-config') "MCP servers must be disabled ON THE INVOCATION ITSELF: connected servers would restore an outbound channel"
 
 # --- Guard repair 2: '$chatSrc -match ''--add-dir''' was ALREADY DEFEATED on master. The literal
@@ -385,7 +393,7 @@ Assert ($invocationBlock.Value -match '--strict-mcp-config') "MCP servers must b
 # --- assertion green and the read-scope pin it claims to protect completely unguarded. Bind it to the
 # --- invocation AND to $dir specifically: '--add-dir $HOME' or '--add-dir (Split-Path $dir)' would
 # --- widen the agent's reach past the one directory Alex chose while a bare '--add-dir' still matched.
-Assert ($invocationBlock.Value -match '--add-dir\s+\$dir\b') 'the read scope must be pinned with --add-dir $dir ON THE INVOCATION - a bare --add-dir match is satisfied by the comments alone, and a different value widens the scope'
+Assert ($invocationBlock.Value -match '--add-dir'',\s*\$dir\b') 'the read scope must be pinned with --add-dir $dir ON THE INVOCATION - a bare --add-dir match is satisfied by the comments alone, and a different value widens the scope'
 # --- Fence repair (Fix 3): the assertion above is satisfied by the FIRST --add-dir it finds, so
 # --- appending a second one ('--add-dir $dir --add-dir $HOME') left it green while handing the agent
 # --- a wider read scope than Alex chose - defeating the scope narrowing this whole block exists to
@@ -399,6 +407,7 @@ Assert ($addDirOccurrences -eq 1) "--add-dir must appear exactly once in the inv
 # --- merging it is how that text used to reach Alex as a normal-looking Jarvis reply). Must be scoped
 # --- to the invocation: a whole-file check is already False today because a comment discusses '2>&1'.
 Assert ($invocationBlock.Value -notmatch '2>&1') "the invocation must not merge stderr into stdout - CLI error text (file paths, stack traces, auth fragments) would be returned to Alex as a reply"
+Assert ($invocationBlock.Value -match '\$psi\.RedirectStandardError\s*=\s*\$true') "stderr must be REDIRECTED: an undrained child blocks once it fills that pipe, which would hang the turn"
 
 # --- Fix 1: the guard pinned the MCP payload string (the Set-Content -Value literal below) but never
 # --- bound it to what --mcp-config actually loads. Changing the invocation to
@@ -407,7 +416,7 @@ Assert ($invocationBlock.Value -notmatch '2>&1') "the invocation must not merge 
 # --- payload assertion still finds and matches the now-unused Set-Content line, and
 # --- --strict-mcp-config is still present. Bind --mcp-config to $cfgPath specifically, and require it
 # --- appear exactly once in the invocation.
-Assert ($invocationBlock.Value -match '--mcp-config\s+\$cfgPath\b') 'the --mcp-config flag on the invocation must be passed $cfgPath specifically - a different path or variable would silently restore MCP servers'
+Assert ($invocationBlock.Value -match '--mcp-config'',\s*\$cfgPath\b') 'the --mcp-config flag on the invocation must be passed $cfgPath specifically - a different path or variable would silently restore MCP servers'
 $mcpConfigOccurrences = [regex]::Matches($invocationBlock.Value, '--mcp-config').Count
 Assert ($mcpConfigOccurrences -eq 1) "--mcp-config must appear exactly once in the invocation, found $mcpConfigOccurrences"
 
@@ -440,7 +449,51 @@ Assert ($jobStatements[0] -match '^Set-Location\s+-LiteralPath\s+\$dir\s+-ErrorA
 # model read. Live, that returned a fluent, confident answer to a question never asked. Exit code 0.
 #
 # The prompt now travels on STDIN, which is byte-exact. These assertions make that irreversible.
-Assert ($jobBody -match '\$stdout\s*=\s*\$p\s*\|\s*&\s*claude\s+(?:-p|--print)') "the prompt must be PIPED into claude (`$p | & claude -p ...), not passed as a native argument - argv marshalling silently truncates any prompt containing a quoted phrase"
+#
+# --- Early-close fix: the prompt used to be PIPED ('$p | & claude -p ...') and this assertion pinned
+# --- that pipe. Piping is no longer sufficient and the assertion has been REPOINTED, not dropped.
+# --- PowerShell's native pipeline gives the writer no way to observe the child, so a child that stops
+# --- reading stdin before EOF and exits 0 delivered a PARTIAL prompt through every gate in
+# --- Invoke-ChatTurn: measured against the previous revision, 15271 characters sent, 100 bytes read,
+# --- 0 of 2 nonce END markers delivered, and a fluent confident reply returned to Alex as a SUCCESS.
+# --- NativeCommandProcessor raises no error record when that pipe breaks ($Error.Count is 0 even with
+# --- 2>&1 in place of 2>$null, so the discarded stderr was never the concealer). Truncation cuts from
+# --- the END and Build-ChatPrompt puts the nonce END markers last, so a short read dismantles the
+# --- fence and leaves untrusted collector text as the last unfenced thing the model reads - and the
+# --- prompt size is attacker-influenced, since check-job-mail.ps1 output flows into it.
+# --- The write is now driven through System.Diagnostics.Process so it is OBSERVABLE, and the three
+# --- observations are asserted individually below. Each is separately necessary, and each was
+# --- measured to be individually INSUFFICIENT, so none may be deleted as redundant.
+Assert ($jobBody -match '\$stdin\s*=\s*\$proc\.StandardInput\.BaseStream') 'the prompt must be written to the child'"'"'s stdin through System.Diagnostics.Process, so the write is observable - a native pipeline reports NOTHING when the child stops reading early'
+Assert ($jobBody -match '\$stdin\.Write\(\$promptBytes,\s*\$delivered,\s*\$n\)') 'the prompt bytes must be written to that stream directly'
+# (1) short write: bytes handed to the pipe are counted, so a write that dies mid-prompt is a NUMBER
+Assert ($jobBody -match '\$delivered\s*\+=\s*\$n') 'the job must COUNT the bytes it delivered - a partial write has to be observable as a number, not inferred'
+# (2) drain: WaitForPipeDrain returns once the pipe buffer is empty. Measured: the OS buffer swallowed
+# 65536 bytes without ever blocking the write, so the short-write count alone misses the whole
+# realistic prompt range and this check is what covers it.
+Assert ($jobBody -match 'WaitForPipeDrain\(\)') 'the job must wait for the child to DRAIN the pipe - the OS buffer absorbs a whole realistic prompt without blocking the write, so a short read is otherwise invisible'
+# (3) exit-before-EOF: the decisive one. Measured: once the child exits, its unread buffer is
+# DISCARDED and WaitForPipeDrain then returns SUCCESS, so a successful drain does NOT prove the child
+# read anything. EOF is ours to send and is sent only after the drain, so a child that has already
+# exited at that moment cannot have read to the end of the prompt. The sample must therefore happen
+# BEFORE the close - taken after it, it would report nothing but normal termination.
+Assert ($jobBody -match '\$exitedBeforeEof\s*=\s*\$proc\.HasExited') 'the job must sample HasExited BEFORE sending EOF - a successful drain alone cannot distinguish "the child read it all" from "the child died and the buffered prompt was discarded"'
+$eofSampleIdx = $jobBody.IndexOf('$exitedBeforeEof = $proc.HasExited')
+$eofCloseIdx  = $jobBody.IndexOf('$stdin.Close()')
+Assert ($eofSampleIdx -ge 0 -and $eofCloseIdx -gt $eofSampleIdx) 'the HasExited sample must come BEFORE $stdin.Close() - EOF is what makes a legitimate child exit, so a sample taken after the close proves nothing'
+# EOF must be sent by closing the BaseStream, never $proc.StandardInput: that StreamWriter carries the
+# console encoding's preamble and flushing it appends a byte order mark AFTER the prompt (measured: a
+# host with a UTF-8 console added ef bb bf, corrupting the byte-identity this whole section defends).
+Assert ($jobBody -notmatch '\$proc\.StandardInput\.Close\(\)') 'EOF must be sent by closing the BaseStream, not $proc.StandardInput - flushing that StreamWriter appends the console encoding preamble as trailing bytes after the prompt'
+# stderr is drained so the child cannot block on it, and its content must never reach the reply
+Assert ($jobBody -notmatch '\$errTask\.Result') 'the stderr task result must never be read - CLI error text (file paths, stack traces, auth fragments) would flow back to Alex looking like Jarvis talking'
+Assert ($jobBody -match 'Output\s*=\s*\$stdout\b') 'the reply must be built from the stdout task alone'
+# and the parent must ACT on all four observations. A recorded failure that nothing checks is not a
+# guard: this is the gate that turns a short read into $null instead of a confident wrong answer.
+Assert ($chatSrc -match 'if\s*\(\$result\.DeliveryError\)\s*\{\s*return\s*\$null\s*\}') 'Invoke-ChatTurn must return $null when the job reports a delivery error'
+Assert ($chatSrc -match 'if\s*\(-not\s*\$result\.Drained\)\s*\{\s*return\s*\$null\s*\}') 'Invoke-ChatTurn must return $null when the prompt was never drained by the child'
+Assert ($chatSrc -match 'if\s*\(\$result\.ExitedBeforeEof\)\s*\{\s*return\s*\$null\s*\}') 'Invoke-ChatTurn must return $null when the child exited before EOF - that is the signal a short read produces'
+Assert ($chatSrc -match '\$result\.Delivered\s*-ne\s*\$result\.PromptBytes') 'Invoke-ChatTurn must return $null unless every prompt byte was delivered'
 # --- Fence repair (Fix 2): this assertion used to read
 # ---   $invocationBlock.Value -notmatch 'claude\s+(?:-p|--print)(?:\s|`)*\$'
 # --- which is anchored IMMEDIATELY after the flag and only rejects a positional whose first
@@ -457,16 +510,21 @@ Assert ($jobBody -match '\$stdout\s*=\s*\$p\s*\|\s*&\s*claude\s+(?:-p|--print)')
 # --- $($p). The negative lookahead keeps longer names ('$pidFile', '$prompt') from false-positiving.
 Assert ($invocationBlock.Value -notmatch '\$\{?p\}?(?![A-Za-z0-9_])') "the prompt variable must not appear ANYWHERE in the claude invocation - it travels on stdin only. A positional copy (adjacent to -p, quoted, or parked further down the continued line) makes claude read the SHREDDED argv copy and ignore stdin, restoring the silent-truncation bug with this suite green"
 
-# stdin is encoded with $OutputEncoding, which defaults to us-ascii in PS 5.1 - without this line every
-# non-ASCII character (em dashes in Jarvis's own replies, which come back as history; accented company
-# names; emoji from the phone) is silently replaced with '?'. Measured: U+2014 arrived as 0x3F. It must
-# be set INSIDE the job: the identical assignment in the parent script scope does not reach the job
-# runspace (measured - still mangled), so a tidy-up that hoists it to the top of the file would quietly
-# reintroduce the same silent-corruption class this whole section exists to eliminate.
-Assert ($jobBody -match '\$OutputEncoding\s*=\s*New-Object\s+System\.Text\.UTF8Encoding\(\s*\$false\s*\)') 'the job must set $OutputEncoding to a no-BOM UTF8Encoding INSIDE the scriptblock, or stdin is encoded us-ascii and every non-ASCII character silently becomes a question mark'
-$encIdx = $jobBody.IndexOf('$OutputEncoding')
+# The prompt's ENCODING is now explicit rather than inherited. Under the old native pipeline stdin was
+# encoded with $OutputEncoding, which defaults to us-ascii in PS 5.1, so without an assignment inside
+# the job every non-ASCII character was silently replaced with '?' - em dashes in Jarvis's own replies
+# (which come back as history), accented company names, emoji from the phone. Measured: U+2014 arrived
+# as 0x3F. The bytes are now produced directly, which removes the dependence on host state entirely,
+# so the assertion pins the ENCODER: a no-BOM UTF8Encoding applied to the prompt itself. The no-BOM
+# ctor stays load-bearing - the BOM-ful one would prepend ef bb bf to the front of the persona.
+Assert ($jobBody -match '\$promptBytes\s*=\s*\(New-Object\s+System\.Text\.UTF8Encoding\(\s*\$false\s*\)\)\.GetBytes\(\$p\)') 'the job must encode the prompt itself as no-BOM UTF-8 INSIDE the scriptblock, or non-ASCII characters are mangled by whatever the host encoding happens to be'
+$encIdx = $jobBody.IndexOf('$promptBytes')
 $locIdx = $jobBody.IndexOf('Set-Location')
-Assert ($locIdx -ge 0 -and $encIdx -gt $locIdx) 'the $OutputEncoding assignment must come AFTER Set-Location - the scope pin has to stay the first statement in the job'
+Assert ($locIdx -ge 0 -and $encIdx -gt $locIdx) 'the prompt encoding must come AFTER Set-Location - the scope pin has to stay the first statement in the job'
+# ...and the REPLY's decoding is pinned too. The job host's console code page is ibm850 (measured), so
+# leaving stdout decoding to the host mangles every non-ASCII character on the way back - and the
+# reply goes straight into the chat log and returns as history on the next turn.
+Assert ($invocationBlock.Value -match '\$psi\.StandardOutputEncoding\s*=\s*New-Object\s+System\.Text\.UTF8Encoding\(\s*\$false\s*\)') 'the reply must be decoded as UTF-8, not with the job host console code page (ibm850, measured), or non-ASCII comes back mangled and is then logged and replayed as history'
 
 # --input-format is what tells claude the piped bytes are a plain-text prompt. 'stream-json' expects a
 # JSON envelope instead and would discard a plain prompt, so pin the value, not merely the presence.
@@ -475,8 +533,15 @@ Assert ($locIdx -ge 0 -and $encIdx -gt $locIdx) 'the $OutputEncoding assignment 
 # --- without --input-format claude is free to interpret the piped bytes some other way. Presence is
 # --- now itself an assertion, and the count is pinned so a second '--input-format stream-json'
 # --- appended later in the invocation cannot win the argument parse while -match reports the first.
-Assert ($invocationBlock.Value -match '--input-format\s+(\S+)') "--input-format must be present ON THE INVOCATION - it is what tells claude the piped bytes are a plain-text prompt, and deleting it used to pass this guard silently"
-Assert ($Matches[1] -eq 'text') "--input-format on the invocation must be 'text' (the piped prompt is plain text), got '$($Matches[1])'"
+# --- Judgement fix: this used to read the capture out of the automatic $Matches variable on the line
+# --- AFTER the -match, with an Assert CALL in between. $Matches is written by every successful
+# --- -match in the same scope, and Assert's body is free to run one - so any future -match inserted
+# --- between these two statements would silently repoint the value assertion at unrelated text while
+# --- it still reported as verifying --input-format. Capture into a local instead, so the two
+# --- statements cannot be separated by anything that changes the meaning of the second.
+$inputFormatMatch = [regex]::Match($invocationBlock.Value, '--input-format'',\s*''(\S+?)''')
+Assert ($inputFormatMatch.Success) "--input-format must be present ON THE INVOCATION - it is what tells claude the piped bytes are a plain-text prompt, and deleting it used to pass this guard silently"
+Assert ($inputFormatMatch.Groups[1].Value -eq 'text') "--input-format on the invocation must be 'text' (the piped prompt is plain text), got '$($inputFormatMatch.Groups[1].Value)'"
 $inputFormatOccurrences = [regex]::Matches($invocationBlock.Value, '--input-format').Count
 Assert ($inputFormatOccurrences -eq 1) "--input-format must appear exactly once in the invocation, found $inputFormatOccurrences - a second one would decide the parse while the assertion above validated the first"
 
@@ -509,13 +574,15 @@ Assert ($mcpValue.Groups[1].Value -eq '{"mcpServers":{}}') "the MCP config paylo
 # --- defined but unused, (5) a second 'claude -p' invocation elsewhere with no --allowedTools at
 # --- all. Assert against the INVOCATION itself, not just the constants' values.
 
-# the flag must be followed directly by a bare variable, never a quoted literal (catches 1)
-Assert ($chatSrc -match '--allowedTools\s+\$[A-Za-z_]\w*\s') "--allowedTools must be followed by a bare variable, not a literal"
-Assert ($chatSrc -notmatch "--allowedTools\s+'") "--allowedTools must never be followed by a single-quoted literal"
-Assert ($chatSrc -notmatch '--allowedTools\s+"') "--allowedTools must never be followed by a double-quoted literal"
-Assert ($chatSrc -match '--disallowedTools\s+\$[A-Za-z_]\w*\s') "--disallowedTools must be followed by a bare variable, not a literal"
-Assert ($chatSrc -notmatch "--disallowedTools\s+'") "--disallowedTools must never be followed by a single-quoted literal"
-Assert ($chatSrc -notmatch '--disallowedTools\s+"') "--disallowedTools must never be followed by a double-quoted literal"
+# the flag must be followed directly by a bare variable, never a quoted literal (catches 1). The flags
+# now travel as entries in a token array, so the separator is "', " rather than whitespace - the
+# property is unchanged: whatever value the flag carries must be the constant handed into the job.
+Assert ($invocationBlock.Value -match '--allowedTools'',\s*\$[A-Za-z_]\w*') "--allowedTools must be followed by a bare variable, not a literal"
+Assert ($invocationBlock.Value -notmatch '--allowedTools'',\s*''') "--allowedTools must never be followed by a single-quoted literal"
+Assert ($invocationBlock.Value -notmatch '--allowedTools'',\s*"') "--allowedTools must never be followed by a double-quoted literal"
+Assert ($invocationBlock.Value -match '--disallowedTools'',\s*\$[A-Za-z_]\w*') "--disallowedTools must be followed by a bare variable, not a literal"
+Assert ($invocationBlock.Value -notmatch '--disallowedTools'',\s*''') "--disallowedTools must never be followed by a single-quoted literal"
+Assert ($invocationBlock.Value -notmatch '--disallowedTools'',\s*"') "--disallowedTools must never be followed by a double-quoted literal"
 
 # the constant handed to the job must be the bare name, never concatenated or wrapped into an
 # expression - '($script:JarvisChatAllowedTools + '' Bash'')' would widen the effective set while
@@ -560,16 +627,22 @@ Assert ($disallowOccurrences -eq 1) "exactly one --disallowedTools in telegram-c
 Assert ($chatSrc -notmatch '--allowed-tools\b') "the kebab-case alias --allowed-tools must not be used either"
 Assert ($chatSrc -notmatch '--disallowed-tools\b') "the kebab-case alias --disallowed-tools must not be used either"
 
-# exactly one invocation of claude -p (or its --print alias - claude --help documents -p/--print as
-# aliases on the installed 2.1.116 CLI, so a second invocation spelled 'claude --print ... --model
-# sonnet --output-format text' with no --allowedTools would evade a regex that only matches '-p')
-# in the whole file - counting '--allowedTools' occurrences (the original check, kept above) says
-# nothing about a SECOND invocation elsewhere that has no --allowedTools at all (catches 5). Strip
-# comment lines first so a future comment merely mentioning the literal 'claude -p' cannot fail this
-# assertion with a misleading count.
+# exactly one mention of the claude binary in the whole file - counting '--allowedTools' occurrences
+# (the original check, kept above) says nothing about a SECOND invocation elsewhere that has no
+# --allowedTools at all (catches 5). Strip comment lines first so a comment merely discussing the CLI
+# cannot fail this assertion with a misleading count.
+# --- Judgement fix: this used to count 'claude\s+(-p|--print)\b', which is defeated purely by
+# --- ARGUMENT ORDER. Two decoy variants passed all 18 suites green by putting a second call BEFORE
+# --- the sanctioned one with the prompt positional-FIRST - '& claude $p --print --model sonnet
+# --- --output-format text' - so the flag never sat adjacent to the binary and the count stayed at 1,
+# --- while claude read the shredded argv copy and the reply from the decoy replaced the real one.
+# --- Count the BARE BINARY instead: no ordering of arguments can hide a mention of the name itself.
+# --- Case-insensitive, since Windows resolves 'Claude' just as happily; the trailing lookahead keeps
+# --- unrelated identifiers that merely start with the word (claude-token.xml, CLAUDE_CODE_OAUTH_
+# --- TOKEN) from inflating the count, and neither is spellable as an executable.
 $chatSrcNoComments = (($chatSrc -split '\r?\n') | Where-Object { $_ -notmatch '^\s*#' }) -join "`n"
-$claudeInvocations = [regex]::Matches($chatSrcNoComments, 'claude\s+(-p|--print)\b').Count
-Assert ($claudeInvocations -eq 1) "exactly one 'claude -p'/'--print' invocation in telegram-chat.ps1, found $claudeInvocations"
+$claudeInvocations = [regex]::Matches($chatSrcNoComments, '(?i)claude(?![-_\w])').Count
+Assert ($claudeInvocations -eq 1) "exactly one mention of the claude binary in telegram-chat.ps1, found $claudeInvocations - a second invocation (decoy or otherwise) must not exist at any argument order"
 
 # --- Fix 3: the prefetch step must be bounded by a TOTAL wall-clock budget shared across ALL
 # --- collectors, not left to run unbounded inside the enclosing scheduled task's hard 10-minute kill.
@@ -713,15 +786,62 @@ $argvCap  = Join-Path $fidDir 'argv.txt'
 # precisely the case the argv check exists to catch, so it must not also be the case that breaks the
 # recorder. The helper reads argv from the PARENT process (the cmd.exe hosting claude.cmd) via CIM
 # instead: that CommandLine is the exact line the child received, whatever characters are in it.
+# --- Judgement fix (recorder blind spot): both recordings used to be WriteAllBytes / WriteAllText,
+# --- which OVERWRITE. Every claude invocation within a turn clobbered the previous record, so this
+# --- guard only ever inspected the LAST child process - and a decoy call placed BEFORE the sanctioned
+# --- one is therefore completely invisible to it. Two variants shipped all 18 suites green that way,
+# --- each running '& claude $p --print ...' first (prompt positional-FIRST, so the old source-level
+# --- 'claude\s+(-p|--print)' count never saw it either) and then overwriting the real reply with the
+# --- decoy's. The recorder now APPENDS ONE DELIMITED RECORD PER INVOCATION on both channels, the
+# --- caller asserts on EVERY record, and the record COUNT is itself pinned - so a decoy is caught by
+# --- arithmetic alone, whatever it is spelled like and wherever it sits.
 $shimCapture = @'
-# stdin, raw BYTES ([Console]::In would decode as ANSI and mangle exactly the non-ASCII under test)
+# stdin, raw BYTES ([Console]::In would decode as ANSI and mangle exactly the non-ASCII under test),
+# APPENDED after a delimiter that cannot occur in the recorded data: a NUL-wrapped tag. The prompt is
+# UTF-8 text, in which 0x00 never appears, so no payload can forge or split a record.
+$marker = [byte[]](0,74,86,45,82,69,67,0)
 $i = [Console]::OpenStandardInput()
 $m = New-Object IO.MemoryStream
-$i.CopyTo($m)
-[IO.File]::WriteAllBytes($env:JARVIS_CHAT_TEST_STDIN, $m.ToArray())
+if ($env:JARVIS_CHAT_TEST_READBYTES) {
+  # EARLY-CLOSE MODE: read only N bytes and exit WITHOUT draining the rest, then let claude.cmd exit
+  # 0 with a fluent reply. This is the shape of the defect: a partial prompt, a clean exit code and a
+  # confident answer to a question the model never saw.
+  $buf = New-Object byte[] ([int]$env:JARVIS_CHAT_TEST_READBYTES)
+  $n = $i.Read($buf, 0, $buf.Length)
+  if ($n -gt 0) { $m.Write($buf, 0, $n) }
+} elseif ($env:JARVIS_CHAT_TEST_LAZY) {
+  # LAZY MODE: a SLOW but complete reader - reads a chunk, stalls, then drains the rest. It must NOT
+  # be mistaken for an early close. This is the false-positive direction, and it matters just as much:
+  # a detector that fires here would take the whole chat surface down rather than answer.
+  $buf = New-Object byte[] 4096
+  $n = $i.Read($buf, 0, $buf.Length)
+  if ($n -gt 0) { $m.Write($buf, 0, $n) }
+  Start-Sleep -Seconds 2
+  $i.CopyTo($m)
+} else {
+  $i.CopyTo($m)
+}
+$b = $m.ToArray()
+$fs = New-Object IO.FileStream($env:JARVIS_CHAT_TEST_STDIN, [IO.FileMode]::Append, [IO.FileAccess]::Write, [IO.FileShare]::None)
+try {
+  $fs.Write($marker, 0, $marker.Length)
+  $fs.Write($b, 0, $b.Length)
+} finally { $fs.Close() }
+# Optional UTF-8 reply, written as raw BYTES straight to stdout (base64 in, so nothing the env
+# round-trip could mangle decides the test). claude's stdout really is UTF-8; 'echo' from the batch
+# shim would emit the console code page instead, which cannot exercise the decoding under test.
+if ($env:JARVIS_CHAT_TEST_UTF8REPLY) {
+  $rb = [Convert]::FromBase64String($env:JARVIS_CHAT_TEST_UTF8REPLY)
+  $so = [Console]::OpenStandardOutput()
+  $so.Write($rb, 0, $rb.Length)
+  $so.Flush()
+}
 # argv, taken from the parent cmd.exe's own command line. On any failure write a value that CANNOT
 # satisfy the caller's positive control, so a broken recorder fails the suite instead of silently
 # turning every "the prompt is absent from argv" assertion into a vacuous pass.
+# NOTE: this path is CIM-based and so fails on a WMI-restricted host. It fails CLOSED (the literal
+# below cannot satisfy the positive control), but it reports as a RED SUITE with a message that reads
+# like a security failure when it is really an environment one - check WMI/CIM availability first.
 $argvLine = 'ARGV-CAPTURE-FAILED'
 try {
   $self   = Get-CimInstance Win32_Process -Filter ('ProcessId = ' + $PID) -ErrorAction Stop
@@ -730,7 +850,7 @@ try {
 } catch {
   $argvLine = 'ARGV-CAPTURE-FAILED: ' + $_.Exception.Message
 }
-[IO.File]::WriteAllText($env:JARVIS_CHAT_TEST_ARGV, $argvLine, (New-Object System.Text.UTF8Encoding($false)))
+[IO.File]::AppendAllText($env:JARVIS_CHAT_TEST_ARGV, '<<<JVREC>>>' + $argvLine + "`n", (New-Object System.Text.UTF8Encoding($false)))
 '@
 Set-Content -Encoding ASCII -LiteralPath (Join-Path $shimDir 'claude-capture.ps1') -Value $shimCapture
 
@@ -819,52 +939,163 @@ try {
     @{ Name = 'REAL Build-ChatPrompt output (persona + fence)';      Text = $realPrompt }
   )
 
+  # Records are split on the delimiter the shim writes. ISO-8859-1 round-trips every byte value
+  # 1:1 (0x00-0xFF <-> U+0000-U+00FF), so splitting in string space is byte-lossless here and no
+  # payload can be mangled by the parsing itself.
+  $latin1 = [Text.Encoding]::GetEncoding(28591)
+  $recMarkerBytes = [byte[]](0,74,86,45,82,69,67,0)
+  # Both helpers return with a LEADING COMMA: PowerShell unrolls a returned array, and a single-record
+  # result would otherwise arrive at the caller as the record ITSELF - making .Count the number of
+  # BYTES in that record rather than the number of records, and quietly wrecking every count assertion
+  # below. (Observed: a 39-byte baseline prompt reported as 39 invocations.)
+  function Get-StdinRecords([string]$path) {
+    $out = New-Object System.Collections.Generic.List[byte[]]
+    if (Test-Path $path) {
+      $parts = $latin1.GetString([IO.File]::ReadAllBytes($path)).Split([string[]]@($latin1.GetString($recMarkerBytes)), [StringSplitOptions]::None)
+      # everything before the FIRST delimiter is not a record - there is nothing there
+      for ($pi = 1; $pi -lt $parts.Length; $pi++) { $out.Add($latin1.GetBytes($parts[$pi])) }
+    }
+    return ,$out.ToArray()
+  }
+  function Get-ArgvRecords([string]$path) {
+    $out = New-Object System.Collections.Generic.List[string]
+    if (Test-Path $path) {
+      $parts = [IO.File]::ReadAllText($path).Split([string[]]@('<<<JVREC>>>'), [StringSplitOptions]::None)
+      for ($pi = 1; $pi -lt $parts.Length; $pi++) { $out.Add($parts[$pi]) }
+    }
+    return ,$out.ToArray()
+  }
+
   $fidSw = [System.Diagnostics.Stopwatch]::StartNew()
   foreach ($entry in $corpus) {
     Remove-Item $stdinCap -Force -ErrorAction SilentlyContinue
     Remove-Item $argvCap  -Force -ErrorAction SilentlyContinue
     $sendText = $promptMarker + ' ' + $entry.Text
     $reply = Invoke-ChatTurn -Prompt $sendText -ScopeDir $fidScope -TimeoutSec 120
-    Assert (Test-Path $stdinCap) "prompt fidelity [$($entry.Name)]: claude was invoked but received NOTHING on stdin - the prompt is not being delivered"
-    $gotBytes = [IO.File]::ReadAllBytes($stdinCap)
-    $got  = [Text.Encoding]::UTF8.GetString($gotBytes)
-    # normalise line endings ONLY (the pipeline appends a trailing newline); nothing else is forgiven
-    $gotN  = ($got            -replace [string]$cr, '').Trim()
-    $wantN = ($sendText       -replace [string]$cr, '').Trim()
-    $diag  = "sent $($wantN.Length) chars / $(([regex]::Matches($wantN, [string]$dq)).Count) quotes, received $($gotN.Length) chars / $(([regex]::Matches($gotN, [string]$dq)).Count) quotes"
-    Assert ([string]::Equals($gotN, $wantN, [System.StringComparison]::Ordinal)) "prompt fidelity [$($entry.Name)]: the prompt did not arrive byte-identically ($diag)"
+    $stdinRecords = Get-StdinRecords $stdinCap
+    $argvRecords  = Get-ArgvRecords  $argvCap
+    Assert ($stdinRecords.Count -ge 1) "prompt fidelity [$($entry.Name)]: claude was invoked but received NOTHING on stdin - the prompt is not being delivered"
+
+    # --- EXACTLY ONE INVOCATION PER TURN. This is the arithmetic that catches a decoy outright.
+    # A second claude call - before or after the sanctioned one, at any argument order, spelled with
+    # -p, --print or a positional prompt - adds a record here and fails on the COUNT, with no need for
+    # any assertion to recognise what the decoy looked like. Both known bypass variants ran their
+    # decoy FIRST and relied on the recorder overwriting; per-invocation records end that.
+    Assert ($stdinRecords.Count -eq 1) "prompt fidelity [$($entry.Name)]: expected EXACTLY ONE claude invocation in the turn, the shim recorded $($stdinRecords.Count). A second invocation means a decoy call is running alongside the sanctioned one - whichever reply wins, the prompt reached a child this guard does not vouch for"
+    Assert ($argvRecords.Count -eq 1) "prompt fidelity [$($entry.Name)]: expected EXACTLY ONE recorded argv in the turn, got $($argvRecords.Count)"
     Assert ($reply -eq 'REPLY-SENTINEL') "prompt fidelity [$($entry.Name)]: a successful run must return the reply text, got '$reply'"
+
+    # --- EVERY record is asserted, not just the last one. With the count pinned at 1 these loops run
+    # once, but they are written per-record on purpose: if the count assertion is ever relaxed, the
+    # content assertions must not silently start ignoring all but one child process again.
+    $wantN = ($sendText -replace [string]$cr, '').Trim()
+    $ri = 0
+    foreach ($gotBytes in $stdinRecords) {
+      $ri++
+      $got  = [Text.Encoding]::UTF8.GetString($gotBytes)
+      # normalise line endings ONLY (the pipeline appends a trailing newline); nothing else is forgiven
+      $gotN  = ($got -replace [string]$cr, '').Trim()
+      $diag  = "sent $($wantN.Length) chars / $(([regex]::Matches($wantN, [string]$dq)).Count) quotes, received $($gotN.Length) chars / $(([regex]::Matches($gotN, [string]$dq)).Count) quotes"
+      Assert ([string]::Equals($gotN, $wantN, [System.StringComparison]::Ordinal)) "prompt fidelity [$($entry.Name)] record $ri/$($stdinRecords.Count): the prompt did not arrive byte-identically ($diag)"
+      Assert ($gotN.Contains($promptMarker)) "prompt fidelity [$($entry.Name)] record $ri/$($stdinRecords.Count): the marker did not arrive on stdin - the fidelity check itself is not exercising what it thinks it is"
+    }
 
     # --- ARGV SIDE: the prompt must be on stdin and NOWHERE ELSE ---------------------------------
     # Byte-identical stdin above proves the prompt ARRIVED; it says nothing about whether a second,
     # shredded copy also arrived on the command line - and if one did, claude reads THAT and ignores
     # stdin entirely. Every assertion below is about the bytes the child process actually received.
-    Assert (Test-Path $argvCap) "prompt fidelity [$($entry.Name)]: the shim recorded no argv at all - the argv-side check cannot be trusted, so treat it as a failure rather than a pass"
-    $gotArgv = [IO.File]::ReadAllText($argvCap)
-    # POSITIVE CONTROL FIRST. An empty or failed capture would make every absence check below pass
-    # vacuously - a guard that cannot see the thing it claims to guard. Requiring the flags we know
-    # are on the real invocation proves the recorder is looking at the actual command line.
-    Assert ($gotArgv.Contains('--output-format') -and $gotArgv.Contains('--allowedTools')) "prompt fidelity [$($entry.Name)]: the recorded argv is not the real claude invocation, so its absence checks prove nothing. Got: '$gotArgv'"
-    # (a) the marker: present in what was delivered, absent from the command line.
-    Assert ($gotN.Contains($promptMarker)) "prompt fidelity [$($entry.Name)]: the marker did not arrive on stdin - the fidelity check itself is not exercising what it thinks it is"
-    Assert (-not $gotArgv.Contains($promptMarker)) "prompt fidelity [$($entry.Name)]: THE PROMPT IS ON THE COMMAND LINE. claude prefers a positional prompt over stdin, so it reads the argv copy - which PS 5.1 has already shredded and truncated - and the silent-truncation bug is back. Got argv: '$gotArgv'"
-    # (b) zero characters of the prompt: no 40-character window of what was sent may appear in argv.
-    # The marker alone is not enough - a variant that puts a TRUNCATED prompt on argv could drop it.
-    # 40 is long enough that no flag, tool name or temp path can collide with prompt text by accident.
-    $leakWindow = $null
-    $winLen = 40
-    if ($sendText.Length -ge $winLen) {
-      for ($k = 0; $k -le ($sendText.Length - $winLen); $k++) {
-        $win = $sendText.Substring($k, $winLen)
-        if ($gotArgv.IndexOf($win, [System.StringComparison]::Ordinal) -ge 0) { $leakWindow = $win; break }
+    Assert ($argvRecords.Count -ge 1) "prompt fidelity [$($entry.Name)]: the shim recorded no argv at all - the argv-side check cannot be trusted, so treat it as a failure rather than a pass"
+    $ri = 0
+    foreach ($gotArgv in $argvRecords) {
+      $ri++
+      # POSITIVE CONTROL FIRST. An empty or failed capture would make every absence check below pass
+      # vacuously - a guard that cannot see the thing it claims to guard. Requiring the flags we know
+      # are on the real invocation proves the recorder is looking at the actual command line. Applied
+      # PER RECORD, it is also what catches a decoy that carries none of the lockdown flags.
+      Assert ($gotArgv.Contains('--output-format') -and $gotArgv.Contains('--allowedTools')) "prompt fidelity [$($entry.Name)] argv record $ri/$($argvRecords.Count): this recorded argv is not the real claude invocation, so its absence checks prove nothing - and an invocation without the lockdown flags is itself the regression. Got: '$gotArgv'"
+      # (a) the marker: present in what was delivered, absent from the command line.
+      Assert (-not $gotArgv.Contains($promptMarker)) "prompt fidelity [$($entry.Name)] argv record $ri/$($argvRecords.Count): THE PROMPT IS ON THE COMMAND LINE. claude prefers a positional prompt over stdin, so it reads the argv copy - which PS 5.1 has already shredded and truncated - and the silent-truncation bug is back. Got argv: '$gotArgv'"
+      # (b) zero characters of the prompt: no 40-character window of what was sent may appear in argv.
+      # The marker alone is not enough - a variant that puts a TRUNCATED prompt on argv could drop it.
+      # 40 is long enough that no flag, tool name or temp path can collide with prompt text by accident.
+      $leakWindow = $null
+      $winLen = 40
+      if ($sendText.Length -ge $winLen) {
+        for ($k = 0; $k -le ($sendText.Length - $winLen); $k++) {
+          $win = $sendText.Substring($k, $winLen)
+          if ($gotArgv.IndexOf($win, [System.StringComparison]::Ordinal) -ge 0) { $leakWindow = $win; break }
+        }
       }
+      Assert ($null -eq $leakWindow) "prompt fidelity [$($entry.Name)] argv record $ri/$($argvRecords.Count): a run of prompt text reached the command line, so a shredded copy of the prompt is being passed as an argument. Leaked window: '$leakWindow'"
     }
-    Assert ($null -eq $leakWindow) "prompt fidelity [$($entry.Name)]: a run of prompt text reached the command line, so a shredded copy of the prompt is being passed as an argument. Leaked window: '$leakWindow'"
   }
   $fidSw.Stop()
   # The shim returns in milliseconds. A slow run means it was NOT resolved and the real claude was
   # invoked instead - which must fail loudly here rather than quietly making live model calls.
   Assert ($fidSw.Elapsed.TotalSeconds -lt 120) "prompt fidelity: the whole corpus must run against the shim, not a real model - took $($fidSw.Elapsed.TotalSeconds)s"
+
+  # --- EARLY CLOSE: the child reads part of the prompt and exits 0 -------------------------------
+  # THE regression test for the defect this whole delivery-verification mechanism exists to close.
+  # Measured against the previous revision of telegram-chat.ps1, which piped the prompt with
+  # PowerShell's native pipeline: 15271 characters sent, 100 bytes read, 0 of 2 nonce END markers
+  # delivered, and Invoke-ChatTurn returned a fluent confident reply AS A SUCCESS. Every gate passed -
+  # job Completed, result non-null, ExitCode 0, non-empty output - because nothing anywhere observed
+  # whether the child had actually read the question. PowerShell raises no error record when that pipe
+  # breaks, so there was nothing to notice.
+  # The prompt here is a REAL assembled prompt, large because the size is attacker-influenced:
+  # check-job-mail.ps1 output (carrying email subjects) flows into it. Truncation cuts from the END
+  # and Build-ChatPrompt puts the nonce END markers last, so a short read strips the security fence
+  # and leaves untrusted collector text as the last unfenced thing the model reads. Fail closed.
+  $earlyNonce  = New-ChatNonce
+  $earlyPrompt = Build-ChatPrompt -Message ('Did they say ' + $dq + 'next week' + $dq + ' or later?') `
+                   -Persona (Get-ChatPersona) `
+                   -CollectorText ("## collector: jobmail`n" + ($jobmailJson + "`n") * 120) `
+                   -History '' -Nonce $earlyNonce
+  Assert ($earlyPrompt.Length -gt 15000) "the early-close prompt must be large enough to be realistic, got $($earlyPrompt.Length) chars"
+  Remove-Item $stdinCap -Force -ErrorAction SilentlyContinue
+  Remove-Item $argvCap  -Force -ErrorAction SilentlyContinue
+  $env:JARVIS_CHAT_TEST_READBYTES = '100'
+  $earlyReply = Invoke-ChatTurn -Prompt $earlyPrompt -ScopeDir $fidScope -TimeoutSec 120
+  Remove-Item Env:\JARVIS_CHAT_TEST_READBYTES -ErrorAction SilentlyContinue
+  # POSITIVE CONTROL: claude must actually have been invoked and must actually have received only a
+  # fragment. Without this, a run that failed for some unrelated earlier reason would also return
+  # $null and this test would report a working guard while proving nothing at all.
+  $earlyRecords = Get-StdinRecords $stdinCap
+  Assert ($earlyRecords.Count -eq 1) "early close: the shim must have been invoked exactly once, got $($earlyRecords.Count) - otherwise the `$null below proves nothing"
+  Assert ($earlyRecords[0].Length -lt $earlyPrompt.Length) "early close: the stand-in child must have received only a FRAGMENT of the prompt, got $($earlyRecords[0].Length) of $($earlyPrompt.Length) bytes - the probe is not exercising a short read"
+  Assert ($null -eq $earlyReply) "EARLY CLOSE MUST FAIL CLOSED: the child read $($earlyRecords[0].Length) bytes of a $($earlyPrompt.Length)-character prompt and exited 0, and Invoke-ChatTurn returned '$earlyReply' instead of `$null. A partial prompt strips the nonce END markers from the tail, leaving untrusted collector text as the last unfenced thing the model reads - that reply is a confident answer to a question the model never saw"
+
+  # --- ...and the same detector must NOT fire on a SLOW but complete reader ----------------------
+  # The failure direction that matters second: a delivery check that cannot tell "stalled mid-prompt"
+  # from "gave up mid-prompt" would fail closed on every slow turn and take the chat surface down.
+  # This child reads 4KB, stalls two seconds with the rest of the prompt still buffered, then drains
+  # it - which is exactly the shape that makes the drain wait block - and must still get a reply.
+  Remove-Item $stdinCap -Force -ErrorAction SilentlyContinue
+  Remove-Item $argvCap  -Force -ErrorAction SilentlyContinue
+  $env:JARVIS_CHAT_TEST_LAZY = '1'
+  $lazySw = [System.Diagnostics.Stopwatch]::StartNew()
+  $lazyReply = Invoke-ChatTurn -Prompt $earlyPrompt -ScopeDir $fidScope -TimeoutSec 120
+  $lazySw.Stop()
+  Remove-Item Env:\JARVIS_CHAT_TEST_LAZY -ErrorAction SilentlyContinue
+  $lazyRecords = Get-StdinRecords $stdinCap
+  Assert ($lazyRecords.Count -eq 1) "lazy reader: the shim must have been invoked exactly once, got $($lazyRecords.Count)"
+  Assert ($lazySw.Elapsed.TotalSeconds -ge 2) "lazy reader: the child must actually have stalled mid-prompt, took only $($lazySw.Elapsed.TotalSeconds)s - the slow path is not being exercised"
+  Assert ($lazyReply -eq 'REPLY-SENTINEL') "A SLOW READER MUST NOT FAIL CLOSED: the child stalled two seconds mid-prompt but read every byte, and Invoke-ChatTurn returned '$lazyReply' instead of the reply. Stalling is not truncation, and a detector that confuses them takes the whole chat surface down"
+
+  # --- REPLY DIRECTION: non-ASCII must survive the way BACK too ---------------------------------
+  # The whole corpus above tests the prompt direction. The reply direction was a separate, confirmed-
+  # live defect: claude's UTF-8 stdout was decoded with whatever code page the host had (ibm850 inside
+  # Start-Job), so an em dash reached Alex's phone as mojibake - and, worse, was then written to the
+  # chat log and fed back in as history on the next turn. Setting [Console]::OutputEncoding inside the
+  # job does NOT fix it; pinning $psi.StandardOutputEncoding does, because that is what decodes the
+  # redirected stream. Asserted byte-for-byte so the pin cannot be quietly dropped.
+  $replyText = 'Sir, the caf' + $eAcute + ' reply ' + $emDash + ' noted ' + $emoji
+  $env:JARVIS_CHAT_TEST_UTF8REPLY = [Convert]::ToBase64String((New-Object System.Text.UTF8Encoding($false)).GetBytes($replyText))
+  $env:JARVIS_CHAT_TEST_MODE = 'quiet'
+  $encReply = Invoke-ChatTurn -Prompt 'hello' -ScopeDir $fidScope -TimeoutSec 120
+  $env:JARVIS_CHAT_TEST_MODE = ''
+  Remove-Item Env:\JARVIS_CHAT_TEST_UTF8REPLY -ErrorAction SilentlyContinue
+  Assert ([string]::Equals($encReply, $replyText, [System.StringComparison]::Ordinal)) "the reply must come back byte-identically: non-ASCII in Jarvis's own prose (em dash, accented name, emoji) is decoded with the job host's code page unless `$psi.StandardOutputEncoding is pinned to UTF-8, and the mangled text is then logged and replayed as history. Wanted '$replyText', got '$encReply'"
 
   # The failure contract still holds on the paths that DO reach the job (the existing five above never
   # get that far). Note the suite had no passing-path coverage at all before this block either.
@@ -883,7 +1114,7 @@ try {
   Assert ($null -eq (Invoke-ChatTurn -Prompt '   ' -ScopeDir $fidScope)) "a whitespace-only prompt must degrade to `$null"
 } finally {
   $env:PATH = $fidPathSaved
-  Remove-Item Env:\JARVIS_CHAT_TEST_STDIN, Env:\JARVIS_CHAT_TEST_ARGV, Env:\JARVIS_CHAT_TEST_MODE, Env:\JARVIS_CHAT_TEST_EXIT -ErrorAction SilentlyContinue
+  Remove-Item Env:\JARVIS_CHAT_TEST_STDIN, Env:\JARVIS_CHAT_TEST_ARGV, Env:\JARVIS_CHAT_TEST_MODE, Env:\JARVIS_CHAT_TEST_EXIT, Env:\JARVIS_CHAT_TEST_READBYTES, Env:\JARVIS_CHAT_TEST_LAZY, Env:\JARVIS_CHAT_TEST_UTF8REPLY -ErrorAction SilentlyContinue
   Remove-Item $fidDir -Recurse -Force -ErrorAction SilentlyContinue
   if ($fidTokCreated) { Remove-Item $fidTok -Force -ErrorAction SilentlyContinue }
 }
