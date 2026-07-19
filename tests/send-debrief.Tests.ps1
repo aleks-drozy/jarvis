@@ -56,4 +56,43 @@ $mailOnDemand = Build-DebriefMail -NotePath $tmp -ToAddress 'me@example.com' -Ru
 Assert (-not ($mailOnDemand.Subject -match 'late')) "on-demand run must not be flagged late in the subject (got: $($mailOnDemand.Subject))"
 
 Remove-Item $tmp -Force
+
+# --- Fix 3: Get-DebriefChannel had the same fail-open value parsing as Test-ChatEnabled (the two were
+# --- copied from each other): '(telegram|email|both)\b' matched the PREFIX of a malformed value, so
+# --- 'telegram-only' was silently accepted as 'telegram'. A value its author did not spell correctly
+# --- must fall back to the documented default, not be guessed at.
+# --- jarvis-debrief.ps1 runs a full debrief the moment it is dot-sourced, so the function is lifted
+# --- out by source extraction and defined in an isolated scope with its $vault in place. Extraction
+# --- failing is itself an assertion: if the function is renamed or reshaped, this test says so.
+$debriefSrc = Get-Content "$PSScriptRoot\..\skill\bin\jarvis-debrief.ps1" -Raw
+$fnMatch = [regex]::Match($debriefSrc, '(?ms)^function Get-DebriefChannel \{.*?^\}')
+Assert ($fnMatch.Success) "could not extract Get-DebriefChannel from jarvis-debrief.ps1"
+. ([scriptblock]::Create($fnMatch.Value))
+
+$vault = Join-Path $env:TEMP ('jarvis-debrief-channel-test-' + [guid]::NewGuid().ToString('N'))
+New-Item -ItemType Directory -Force -Path $vault | Out-Null
+try {
+  # valid values are unchanged
+  foreach ($valid in @('telegram','email','both')) {
+    Set-Content -Encoding UTF8 (Join-Path $vault 'CONFIG.md') "- modules:`n  debrief_delivery: $valid"
+    Assert ((Get-DebriefChannel) -eq $valid) "a valid debrief_delivery '$valid' must still be honoured"
+  }
+  # ...including the casing and trailing-whitespace tolerance the old regex had
+  Set-Content -Encoding UTF8 (Join-Path $vault 'CONFIG.md') "- modules:`n  debrief_delivery: Telegram  "
+  Assert ((Get-DebriefChannel) -eq 'telegram') "casing and trailing whitespace must still resolve to a valid channel"
+
+  # malformed values fall back to the default instead of matching on a prefix
+  foreach ($bad in @('telegram-only','email-digest','both-ways','telegram and email','tele','none','')) {
+    Set-Content -Encoding UTF8 (Join-Path $vault 'CONFIG.md') "- modules:`n  debrief_delivery: $bad"
+    Assert ((Get-DebriefChannel) -eq 'email') "malformed debrief_delivery '$bad' must fall back to the default 'email', got '$(Get-DebriefChannel)'"
+  }
+  # absent key and unreadable file still default
+  Set-Content -Encoding UTF8 (Join-Path $vault 'CONFIG.md') "- modules:`n  telegram: on"
+  Assert ((Get-DebriefChannel) -eq 'email') "an absent debrief_delivery key must default to email"
+  Remove-Item (Join-Path $vault 'CONFIG.md') -Force
+  Assert ((Get-DebriefChannel) -eq 'email') "a missing CONFIG.md must default to email"
+} finally {
+  Remove-Item $vault -Recurse -Force -ErrorAction SilentlyContinue
+}
+
 Write-Host "send-debrief: ALL PASS"
