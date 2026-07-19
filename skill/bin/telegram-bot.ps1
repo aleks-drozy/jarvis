@@ -293,8 +293,16 @@ function Invoke-TelegramCommand {
       if (-not $reply) {
         $reply = 'That one got away from me, Sir - the run timed out. Try again, or ask me at the desk.'
       }
-      Write-ChatLog -Message $Text -Reply $reply
+      # Fix 4: SEND before logging. The reply already cost an up-to-180s model run; logging used to run
+      # first, so a disk-full, a file lock from a concurrent manual run, or an unset $HOME throwing here
+      # discarded a reply that had already succeeded. Delivering the reply matters more than the audit
+      # trail, so send first. The log write is then wrapped in its own try/catch: a failure there must
+      # not propagate past this point either, since an uncaught throw here would stop the caller
+      # (Invoke-PollOnce) from counting this turn as handled - which Fix 5's warm-window gate depends on.
+      # Trade-off, accepted: a failed log write means this turn is silently missing from the audit trail
+      # rather than retried - the reply already reached Alex either way.
       foreach ($chunk in @(Split-TelegramText $reply 3900)) { Send-Telegram -Text $chunk -Cred $Cred | Out-Null }
+      try { Write-ChatLog -Message $Text -Reply $reply } catch { Write-Warning "chat log write failed (reply already sent): $($_.Exception.Message)" }
     }
     default  {
       $extra = if (Test-ChatEnabled -VaultPath $VAULT) { ' You can also just ask me things in plain English, Sir.' } else { '' }
@@ -319,6 +327,12 @@ function Invoke-PollOnce {
   $act = @{}
   foreach ($a in @(Select-ActionableUpdates -Updates $ups -Now (Get-Date) -MaxAgeMinutes 10 -ChatEnabled:$chatOn)) { $act[[string]$a.UpdateId] = $true }
   $handled = 0
+  # Fix 5: report whether a CHAT turn specifically was handled this poll, via a script-scope flag rather
+  # than changing this function's int return - $handled's meaning (count of handled commands, any kind)
+  # stays exactly what existing callers and tests already rely on. The -Once dispatch below reads this
+  # flag to decide whether to open the warm window: that window exists for conversational latency, so
+  # texting /status (or any non-chat command) must never hold the process open for it.
+  $script:JarvisChatTurnHandled = $false
   foreach ($u in $ups) {
     # CONSUME FIRST (at-most-once). /debrief takes ~3 minutes; if this process is killed mid-command
     # (ExecutionTimeLimit, sleep, reboot) an offset written only at the END of the batch means the whole
@@ -338,7 +352,11 @@ function Invoke-PollOnce {
       }
       continue
     }
-    try { Invoke-TelegramCommand -Command $cmd -Text $u.Text -Cred $Cred; $handled++ }
+    try {
+      Invoke-TelegramCommand -Command $cmd -Text $u.Text -Cred $Cred
+      $handled++
+      if ($cmd -eq 'chat') { $script:JarvisChatTurnHandled = $true }
+    }
     catch { Write-Warning "command failed (dropped, not retried): $($_.Exception.Message)" }
   }
   return $handled
@@ -398,13 +416,19 @@ if ($Once) {
   # Expect the next scheduled tick to be refused as 0x800710E0 while this window is open. That is
   # CORRECT (this loop is doing the polling), not the 2026-07-16 stacking bug.
   $n = Invoke-PollOnce -Cred $cred -TimeoutSec 30
-  if ($n -gt 0 -and (Test-ChatEnabled -VaultPath $VAULT)) {
+  # Fix 5: gate on a CHAT turn having actually been handled, not on $n -gt 0 (any handled command). The
+  # old gate opened this window for /status, /debrief, notes - anything - holding this process (and
+  # blocking the next scheduled tick) for 5 minutes a plain command never needed. Worse, a /debrief
+  # (~3 min) plus a re-armed 5-minute window was the combination most likely to hit the scheduled
+  # task's hard 10-minute ExecutionTimeLimit. The warm window exists for conversational latency, so it
+  # opens only when a chat turn was handled.
+  if ($script:JarvisChatTurnHandled -and (Test-ChatEnabled -VaultPath $VAULT)) {
     $warmUntil = (Get-Date).AddMinutes(5)
     while ((Get-Date) -lt $warmUntil) {
       try {
         $m = Invoke-PollOnce -Cred $cred -TimeoutSec 50
         $n += $m
-        if ($m -gt 0) { $warmUntil = (Get-Date).AddMinutes(5) }   # keep the window alive while he is talking
+        if ($script:JarvisChatTurnHandled) { $warmUntil = (Get-Date).AddMinutes(5) }   # keep the window alive while he is talking
       } catch {
         Write-Warning $_.Exception.Message
         Start-Sleep -Seconds 5
