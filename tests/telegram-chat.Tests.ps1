@@ -261,4 +261,27 @@ Assert ($h -notmatch 'first question') "history drops older turns"
 
 Remove-Item $logTmp -Force
 
+# --- STRUCTURAL NO-EXECUTION GUARD -------------------------------------------------------------
+# The security argument in DESIGN-TELEGRAM-CHAT section 2 (a successful injection can only make
+# Jarvis say something false to Alex, because there is no execution and no outbound channel) holds
+# ONLY while the chat agent's allowlist stays read-only. Behavioural tests rot; this one fails the
+# build the day someone widens it. Same role as the /payments guard in get-bank-data.Tests.ps1.
+Assert ($JarvisChatAllowedTools -eq 'Read Glob Grep') "chat allowlist must be EXACTLY 'Read Glob Grep', got '$JarvisChatAllowedTools'"
+# nothing execution-capable or outbound-capable may appear in the allowlist
+foreach ($bad in @('Bash','Write','Edit','WebFetch','WebSearch','NotebookEdit','Task')) {
+  Assert ($JarvisChatAllowedTools -notmatch "\b$bad\b") "$bad must NEVER appear in the chat allowlist"
+}
+# and the five named in the spec are denied explicitly, as defence in depth
+foreach ($denied in @('Bash','Write','Edit','WebFetch','WebSearch')) {
+  Assert ($JarvisChatDisallowedTools -match "\b$denied\b") "$denied must be explicitly denied"
+}
+
+# and there must be exactly ONE place in the chat script that builds a claude invocation, so a second
+# code path cannot quietly ship with a wider allowlist
+$chatSrc = Get-Content "$PSScriptRoot\..\skill\bin\telegram-chat.ps1" -Raw
+$allowOccurrences = [regex]::Matches($chatSrc, '--allowedTools').Count
+Assert ($allowOccurrences -eq 1) "exactly one --allowedTools in telegram-chat.ps1, found $allowOccurrences"
+Assert ($chatSrc -match '--strict-mcp-config') "MCP servers must be disabled: connected servers would restore an outbound channel"
+Assert ($chatSrc -match '--add-dir') "the read scope must be pinned with --add-dir"
+
 Write-Host "telegram-chat: ALL PASS"
