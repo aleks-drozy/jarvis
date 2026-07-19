@@ -232,4 +232,30 @@ function Build-ChatPrompt {
   return $sb.ToString()
 }
 
+function Get-ChatLogPath { return (Join-Path $HOME '.jarvis\telegram-chat.log') }
+
+function Write-ChatLog {
+  # Append one turn. LOCAL ONLY - never the vault, never the repo (.gitignore already covers *.log,
+  # same reasoning that keeps debriefs/ local). Honest caveat, recorded in the spec: this file is
+  # PLAINTEXT and will contain whatever Alex pastes. That is the price of a triagable remote surface.
+  # Newlines are flattened so one turn stays two greppable lines.
+  param([string]$Message, [string]$Reply, [string]$LogPath = (Get-ChatLogPath))
+  $dir = Split-Path $LogPath
+  if ($dir -and -not (Test-Path $dir)) { New-Item -ItemType Directory -Force -Path $dir | Out-Null }
+  $ts  = (Get-Date).ToString('s')
+  $m   = if ($Message) { $Message -replace '\r?\n', ' ' } else { '' }
+  $r   = if ($Reply)   { $Reply   -replace '\r?\n', ' ' } else { '' }
+  Add-Content -Encoding UTF8 -Path $LogPath -Value "[$ts] ALEX: $m"
+  Add-Content -Encoding UTF8 -Path $LogPath -Value "[$ts] JARVIS: $r"
+}
+
+function Get-ChatHistory {
+  # The last N turns, for conversational context. v1 is otherwise stateless: no shared desktop session.
+  param([int]$Turns = 6, [string]$LogPath = (Get-ChatLogPath))
+  if (-not (Test-Path $LogPath)) { return '' }
+  $lines = @(Get-Content -LiteralPath $LogPath | Where-Object { $_ -match '^\[' })
+  if ($lines.Count -eq 0) { return '' }
+  return (($lines | Select-Object -Last ($Turns * 2)) -join "`n")
+}
+
 if ($DotSourceOnly) { return }
