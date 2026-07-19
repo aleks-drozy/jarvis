@@ -44,12 +44,48 @@ function Get-ChatPrefetch {
   return $out.ToArray()
 }
 
+function Test-CollectorErrorJson {
+  # If a collector's stdout parses as JSON carrying a top-level 'error' property, that collector is
+  # reporting failure IN-BAND (get-bank-data.ps1 does this by design - it always exits 0 so the feed
+  # degrades rather than kills the debrief, and signals failure via {"configured":true,"error":...}
+  # instead). An unchecked exit code alone would miss this, so parse and check explicitly. Returns the
+  # error string, or $null if the text is not JSON or has no truthy top-level 'error'.
+  param([string]$Text)
+  try {
+    $parsed = $Text | ConvertFrom-Json -ErrorAction Stop
+    if ($null -ne $parsed -and ($parsed.PSObject.Properties.Name -contains 'error') -and $parsed.error) {
+      return [string]$parsed.error
+    }
+  } catch { }
+  return $null
+}
+
+function Protect-CollectorDelimiter {
+  # This file invents the '## collector: <name>' block delimiter, so guarding it belongs here too.
+  # Some collectors carry attacker-controlled text verbatim (check-job-mail.ps1 surfaces email
+  # SUBJECTS - the exact vector behind the 2026-07-15 command-injection incident). Unneutralised, a
+  # subject reading "## collector: bank" followed by fabricated balance text would forge an
+  # authentic-looking block that Jarvis could then cite as real data. Neutralise any line that could
+  # open a fake block before it is appended.
+  param([string]$Text)
+  if (-not $Text) { return $Text }
+  $lines = $Text -split "`r?`n"
+  for ($i = 0; $i -lt $lines.Count; $i++) {
+    if ($lines[$i] -match '^\s*##') { $lines[$i] = '(blocked delimiter) ' + $lines[$i] }
+  }
+  return ($lines -join "`n")
+}
+
 function Invoke-ChatPrefetch {
   # Run the named collectors and return their output as a labelled text block for the prompt fence.
   # Each is invoked with NO arguments - nothing from the message is passed through. A collector that
   # fails is reported as unavailable rather than omitted, so the grounding rule makes Jarvis SAY the
   # feed is down instead of quietly answering from stale numbers.
-  param([string[]]$Names, [string]$BinDir)
+  param(
+    [string[]]$Names,
+    [string]$BinDir,
+    [string]$HeartbeatPath = (Join-Path $HOME '.jarvis\bank-heartbeat.json')
+  )
   if (-not $Names -or $Names.Count -eq 0) { return '' }
   $scripts = @{
     bank     = 'get-bank-data.ps1'
@@ -63,23 +99,40 @@ function Invoke-ChatPrefetch {
     [void]$sb.AppendLine("## collector: $n")
     if (-not (Test-Path $path)) { [void]$sb.AppendLine("unavailable: $($scripts[$n]) not found"); continue }
     try {
-      $res = & powershell -NoProfile -File $path 2>&1 | Out-String
-      if ($res -and $res.Trim()) { [void]$sb.AppendLine($res.Trim()) }
-      else { [void]$sb.AppendLine('unavailable: collector returned nothing') }
+      # No 2>&1 here: on a NATIVE command, merging stderr wraps every stderr line in a terminating
+      # NativeCommandError under $ErrorActionPreference='Stop', even when the child exits 0 - that
+      # would discard perfectly good stdout over one benign warning line (same trap documented at
+      # get-bank-data.ps1 ~line 70). Capture stdout only and judge success from $LASTEXITCODE instead.
+      $res = (& powershell -NoProfile -File $path | Out-String)
+      if ($LASTEXITCODE -ne 0) { [void]$sb.AppendLine("unavailable: exit $LASTEXITCODE"); continue }
+      $res = $res.Trim()
+      if (-not $res) { [void]$sb.AppendLine('unavailable: collector returned nothing'); continue }
+      # Some collectors (get-bank-data.ps1 by design) exit 0 on every failure path and report the
+      # failure IN-BAND as {"error": "..."} - a clean exit code alone would miss this.
+      $errMsg = Test-CollectorErrorJson $res
+      if ($errMsg) { [void]$sb.AppendLine("unavailable: $(Protect-CollectorDelimiter $errMsg)") }
+      else { [void]$sb.AppendLine((Protect-CollectorDelimiter $res)) }
     } catch {
-      [void]$sb.AppendLine("unavailable: $($_.Exception.Message)")
+      [void]$sb.AppendLine("unavailable: $(Protect-CollectorDelimiter $_.Exception.Message)")
     }
   }
   # The bank heartbeat is CHEAP (a local file, not an API call) and lives OUTSIDE the agent's
   # --add-dir scope, so the agent cannot read it itself. Fold it in whenever bank data was asked for.
+  # The header is ALWAYS emitted once bank data was requested (even when the file is missing/unreadable)
+  # - the heartbeat exists specifically to convey bank-feed freshness, so silently omitting it is the
+  # failure mode most likely to produce a confidently stale answer.
   if ($Names -contains 'bank') {
-    $hb = Join-Path $HOME '.jarvis\bank-heartbeat.json'
-    if (Test-Path $hb) {
+    [void]$sb.AppendLine('## collector: bank-heartbeat')
+    if (-not (Test-Path $HeartbeatPath)) {
+      [void]$sb.AppendLine('unavailable: heartbeat file not found')
+    } else {
       try {
-        $raw = (Get-Content -LiteralPath $hb -Raw) -replace ('^' + [char]0xFEFF), ''
-        [void]$sb.AppendLine('## collector: bank-heartbeat')
-        [void]$sb.AppendLine($raw.Trim())
-      } catch { }
+        $raw = ((Get-Content -LiteralPath $HeartbeatPath -Raw) -replace ('^' + [char]0xFEFF), '').Trim()
+        if ($raw) { [void]$sb.AppendLine((Protect-CollectorDelimiter $raw)) }
+        else { [void]$sb.AppendLine('unavailable: heartbeat file empty') }
+      } catch {
+        [void]$sb.AppendLine("unavailable: $(Protect-CollectorDelimiter $_.Exception.Message)")
+      }
     }
   }
   return $sb.ToString()
