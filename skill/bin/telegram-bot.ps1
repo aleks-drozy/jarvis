@@ -388,7 +388,32 @@ if ($AlertJobMail) {
   exit 0
 }
 
-if ($Once) { $n = Invoke-PollOnce -Cred $cred -TimeoutSec 30; Write-Host "Handled $n update(s)."; exit 0 }
+if ($Once) {
+  # WARM WINDOW: a scheduled -Once run normally handles a batch and exits, which is right for
+  # fire-and-forget commands but means up to 3 minutes of dead air per conversational turn. When chat
+  # is on and something was actually handled, stay on a bounded long-poll loop so replies during an
+  # active conversation are near-instant, then exit and let the 3-minute schedule resume.
+  # Deliberately BOUNDED, not persistent: a permanent -Poll process is the RAM cost this machine's
+  # 3-minute schedule was chosen to avoid.
+  # Expect the next scheduled tick to be refused as 0x800710E0 while this window is open. That is
+  # CORRECT (this loop is doing the polling), not the 2026-07-16 stacking bug.
+  $n = Invoke-PollOnce -Cred $cred -TimeoutSec 30
+  if ($n -gt 0 -and (Test-ChatEnabled -VaultPath $VAULT)) {
+    $warmUntil = (Get-Date).AddMinutes(5)
+    while ((Get-Date) -lt $warmUntil) {
+      try {
+        $m = Invoke-PollOnce -Cred $cred -TimeoutSec 50
+        $n += $m
+        if ($m -gt 0) { $warmUntil = (Get-Date).AddMinutes(5) }   # keep the window alive while he is talking
+      } catch {
+        Write-Warning $_.Exception.Message
+        Start-Sleep -Seconds 5
+      }
+    }
+  }
+  Write-Host "Handled $n update(s)."
+  exit 0
+}
 
 if ($Poll) {
   Write-Host 'Long-polling for commands (Ctrl+C to stop). Self-only; only your chat id is honoured.'
