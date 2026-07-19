@@ -38,15 +38,18 @@ $VAULT = (Get-JarvisConfig).vault_path
 function Resolve-TelegramCommand {
   # Map an incoming message to ONE of a small whitelist of safe actions. Default = help. This is not a
   # shell: unknown text never executes anything - it just gets the help reply.
-  param([string]$Text)
-  if (-not $Text) { return 'help' }
+  # -ChatEnabled adds ONE extra outcome: unknown text becomes 'chat' instead of 'help'. Without the
+  # switch the behaviour is byte-identical to the pre-chat bridge, so the whitelist stays the default.
+  # The four existing commands always win over chat: /debrief never becomes a conversation.
+  param([string]$Text, [switch]$ChatEnabled)
+  if (-not $Text -or -not $Text.Trim()) { return 'help' }   # empty AND whitespace-only -> help
   $t = $Text.Trim().ToLower() -replace '^/','' -replace '@\w+$',''   # strip a leading slash and @botname
   if ($t -match '^notes$') { return 'notes' }                                   # read recent notes back
   if ($t -match '^(note|log|idea|remember|todo|jot|capture)\b') { return 'note' } # capture the rest as a note
   switch -regex ($t) {
     '^(debrief|brief|briefing|what''?s my day|what should i do)$' { return 'debrief' }
     '^(status|health|how are you|ping)$'                          { return 'status' }
-    default { return 'help' }
+    default { if ($ChatEnabled) { return 'chat' } else { return 'help' } }
   }
 }
 
