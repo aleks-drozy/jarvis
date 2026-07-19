@@ -31,6 +31,7 @@ param(
 $ErrorActionPreference = 'Stop'
 $BIN = $PSScriptRoot
 . "$PSScriptRoot\get-jarvis-config.ps1"
+. "$PSScriptRoot\telegram-chat.ps1"
 $VAULT = (Get-JarvisConfig).vault_path
 
 # ---------- pure helpers (unit-tested; no network) ----------
@@ -38,15 +39,18 @@ $VAULT = (Get-JarvisConfig).vault_path
 function Resolve-TelegramCommand {
   # Map an incoming message to ONE of a small whitelist of safe actions. Default = help. This is not a
   # shell: unknown text never executes anything - it just gets the help reply.
-  param([string]$Text)
-  if (-not $Text) { return 'help' }
+  # -ChatEnabled adds ONE extra outcome: unknown text becomes 'chat' instead of 'help'. Without the
+  # switch the behaviour is byte-identical to the pre-chat bridge, so the whitelist stays the default.
+  # The four existing commands always win over chat: /debrief never becomes a conversation.
+  param([string]$Text, [switch]$ChatEnabled)
+  if (-not $Text -or -not $Text.Trim()) { return 'help' }   # empty AND whitespace-only -> help
   $t = $Text.Trim().ToLower() -replace '^/','' -replace '@\w+$',''   # strip a leading slash and @botname
   if ($t -match '^notes$') { return 'notes' }                                   # read recent notes back
   if ($t -match '^(note|log|idea|remember|todo|jot|capture)\b') { return 'note' } # capture the rest as a note
   switch -regex ($t) {
     '^(debrief|brief|briefing|what''?s my day|what should i do)$' { return 'debrief' }
     '^(status|health|how are you|ping)$'                          { return 'status' }
-    default { return 'help' }
+    default { if ($ChatEnabled) { return 'chat' } else { return 'help' } }
   }
 }
 
@@ -96,23 +100,26 @@ function Select-ActionableUpdates {
   #   2. COLLAPSE - repeat/idempotent commands (debrief, status, help) keep only the LAST occurrence.
   #      Running /debrief four times produces four identical briefings and ~12 minutes of work.
   # Notes are NEVER collapsed: each note is distinct data and dropping one loses information.
+  # Chat messages are NEVER collapsed: two questions are two questions, and collapsing silently loses one.
   # An update with an unknown date is acted on (dropping a real command silently is the worse failure).
-  param($Updates, [datetime]$Now, [int]$MaxAgeMinutes = 10)
+  param($Updates, [datetime]$Now, [int]$MaxAgeMinutes = 10, [switch]$ChatEnabled)
   $fresh = New-Object System.Collections.Generic.List[object]
   foreach ($u in $Updates) {
     if ($null -ne $u.Date -and $u.Date -lt $Now.AddMinutes(-$MaxAgeMinutes)) { continue }   # stale
     $fresh.Add($u)
   }
-  # keep the LAST update per collapsible command; keep every note
+  # keep the LAST update per collapsible command; keep every note AND every chat message.
+  # -ChatEnabled MUST be threaded into Resolve-TelegramCommand here: without it, chat messages resolve
+  # to 'help' and collapse into one, silently discarding questions (the 2026-07-16 bug class).
   $lastOf = @{}
   foreach ($u in $fresh) {
-    $cmd = Resolve-TelegramCommand $u.Text
-    if ($cmd -ne 'note') { $lastOf[$cmd] = $u.UpdateId }
+    $cmd = Resolve-TelegramCommand -Text $u.Text -ChatEnabled:$ChatEnabled
+    if ($cmd -ne 'note' -and $cmd -ne 'chat') { $lastOf[$cmd] = $u.UpdateId }
   }
   $out = New-Object System.Collections.Generic.List[object]
   foreach ($u in $fresh) {
-    $cmd = Resolve-TelegramCommand $u.Text
-    if ($cmd -eq 'note') { $out.Add($u); continue }
+    $cmd = Resolve-TelegramCommand -Text $u.Text -ChatEnabled:$ChatEnabled
+    if ($cmd -eq 'note' -or $cmd -eq 'chat') { $out.Add($u); continue }
     if ($lastOf[$cmd] -eq $u.UpdateId) { $out.Add($u) }   # superseded duplicates are dropped
   }
   return $out
@@ -274,7 +281,33 @@ function Invoke-TelegramCommand {
       $recent = Get-RecentCaptures 10
       Send-Telegram -Text $(if ($recent) { "Recent notes, Sir:`n$recent" } else { 'No notes captured yet, Sir.' }) -Cred $Cred | Out-Null
     }
-    default  { Send-Telegram -Text 'I take: /debrief, /status, "note <text>" to jot something down, and /notes to read them back, Sir. Full conversation is on the desktop (Ctrl+Shift+J).' -Cred $Cred | Out-Null }
+    'chat' {
+      # Read-only remote turn. Pre-fetch runs FIXED collectors here in PowerShell; the agent itself
+      # only ever gets Read/Glob/Grep (see telegram-chat.ps1 for the full contract).
+      $names     = Get-ChatPrefetch -Text $Text
+      $collector = Invoke-ChatPrefetch -Names $names -BinDir $BIN
+      $nonce     = New-ChatNonce
+      $prompt    = Build-ChatPrompt -Message $Text -Persona (Get-ChatPersona) `
+                     -CollectorText $collector -History (Get-ChatHistory -Turns 6) -Nonce $nonce
+      $reply     = Invoke-ChatTurn -Prompt $prompt -ScopeDir $VAULT -TimeoutSec 180
+      if (-not $reply) {
+        $reply = 'That one got away from me, Sir - the run timed out. Try again, or ask me at the desk.'
+      }
+      # Fix 4: SEND before logging. The reply already cost an up-to-180s model run; logging used to run
+      # first, so a disk-full, a file lock from a concurrent manual run, or an unset $HOME throwing here
+      # discarded a reply that had already succeeded. Delivering the reply matters more than the audit
+      # trail, so send first. The log write is then wrapped in its own try/catch: a failure there must
+      # not propagate past this point either, since an uncaught throw here would stop the caller
+      # (Invoke-PollOnce) from counting this turn as handled - which Fix 5's warm-window gate depends on.
+      # Trade-off, accepted: a failed log write means this turn is silently missing from the audit trail
+      # rather than retried - the reply already reached Alex either way.
+      foreach ($chunk in @(Split-TelegramText $reply 3900)) { Send-Telegram -Text $chunk -Cred $Cred | Out-Null }
+      try { Write-ChatLog -Message $Text -Reply $reply } catch { Write-Warning "chat log write failed (reply already sent): $($_.Exception.Message)" }
+    }
+    default  {
+      $extra = if (Test-ChatEnabled -VaultPath $VAULT) { ' You can also just ask me things in plain English, Sir.' } else { '' }
+      Send-Telegram -Text ('I take: /debrief, /status, "note <text>" to jot something down, and /notes to read them back, Sir.' + $extra + ' Full conversation is on the desktop (Ctrl+Shift+J).') -Cred $Cred | Out-Null
+    }
   }
 }
 
@@ -284,6 +317,7 @@ function Write-Offset { param($Offset) @{ offset = $Offset } | ConvertTo-Json | 
 function Invoke-PollOnce {
   # One long-poll: fetch, act on allowed commands, advance the offset. Returns count handled.
   param($Cred, [int]$TimeoutSec = 30)
+  $chatOn = Test-ChatEnabled -VaultPath $VAULT
   $offset = Read-Offset
   $body = @{ timeout = $TimeoutSec }
   if ($offset) { $body.offset = $offset }
@@ -291,8 +325,14 @@ function Invoke-PollOnce {
   $ups = @(Parse-TelegramUpdates $resp)
   # Collapse repeats + ignore a stale backlog BEFORE doing any work (see Select-ActionableUpdates).
   $act = @{}
-  foreach ($a in @(Select-ActionableUpdates -Updates $ups -Now (Get-Date) -MaxAgeMinutes 10)) { $act[[string]$a.UpdateId] = $true }
+  foreach ($a in @(Select-ActionableUpdates -Updates $ups -Now (Get-Date) -MaxAgeMinutes 10 -ChatEnabled:$chatOn)) { $act[[string]$a.UpdateId] = $true }
   $handled = 0
+  # Fix 5: report whether a CHAT turn specifically was handled this poll, via a script-scope flag rather
+  # than changing this function's int return - $handled's meaning (count of handled commands, any kind)
+  # stays exactly what existing callers and tests already rely on. The -Once dispatch below reads this
+  # flag to decide whether to open the warm window: that window exists for conversational latency, so
+  # texting /status (or any non-chat command) must never hold the process open for it.
+  $script:JarvisChatTurnHandled = $false
   foreach ($u in $ups) {
     # CONSUME FIRST (at-most-once). /debrief takes ~3 minutes; if this process is killed mid-command
     # (ExecutionTimeLimit, sleep, reboot) an offset written only at the END of the batch means the whole
@@ -300,8 +340,23 @@ function Invoke-PollOnce {
     # Losing one command to a crash is strictly better than delivering it five times.
     Write-Offset ($u.UpdateId + 1)
     if (-not (Test-TelegramSenderAllowed $u.ChatId $Cred.ChatId)) { continue }   # self-only
-    if (-not $act.ContainsKey([string]$u.UpdateId)) { continue }                 # stale or superseded
-    try { Invoke-TelegramCommand -Command (Resolve-TelegramCommand $u.Text) -Text $u.Text -Cred $Cred; $handled++ }
+    $cmd = Resolve-TelegramCommand -Text $u.Text -ChatEnabled:$chatOn
+    if (-not $act.ContainsKey([string]$u.UpdateId)) {
+      # Stale or superseded. A superseded /debrief is silently dropped (that IS the fix). But a stale
+      # QUESTION deserves a word: silence is what made Alex press /debrief four times on 2026-07-16.
+      # Cheap acknowledgement, no model call.
+      if ($cmd -eq 'chat' -and $null -ne $u.Date) {
+        try {
+          Send-Telegram -Text ("That came in at $($u.Date.ToString('HH:mm')), Sir. I have let it lie - ask again if it still matters.") -Cred $Cred | Out-Null
+        } catch { }
+      }
+      continue
+    }
+    try {
+      Invoke-TelegramCommand -Command $cmd -Text $u.Text -Cred $Cred
+      $handled++
+      if ($cmd -eq 'chat') { $script:JarvisChatTurnHandled = $true }
+    }
     catch { Write-Warning "command failed (dropped, not retried): $($_.Exception.Message)" }
   }
   return $handled
@@ -351,7 +406,38 @@ if ($AlertJobMail) {
   exit 0
 }
 
-if ($Once) { $n = Invoke-PollOnce -Cred $cred -TimeoutSec 30; Write-Host "Handled $n update(s)."; exit 0 }
+if ($Once) {
+  # WARM WINDOW: a scheduled -Once run normally handles a batch and exits, which is right for
+  # fire-and-forget commands but means up to 3 minutes of dead air per conversational turn. When chat
+  # is on and something was actually handled, stay on a bounded long-poll loop so replies during an
+  # active conversation are near-instant, then exit and let the 3-minute schedule resume.
+  # Deliberately BOUNDED, not persistent: a permanent -Poll process is the RAM cost this machine's
+  # 3-minute schedule was chosen to avoid.
+  # Expect the next scheduled tick to be refused as 0x800710E0 while this window is open. That is
+  # CORRECT (this loop is doing the polling), not the 2026-07-16 stacking bug.
+  $n = Invoke-PollOnce -Cred $cred -TimeoutSec 30
+  # Fix 5: gate on a CHAT turn having actually been handled, not on $n -gt 0 (any handled command). The
+  # old gate opened this window for /status, /debrief, notes - anything - holding this process (and
+  # blocking the next scheduled tick) for 5 minutes a plain command never needed. Worse, a /debrief
+  # (~3 min) plus a re-armed 5-minute window was the combination most likely to hit the scheduled
+  # task's hard 10-minute ExecutionTimeLimit. The warm window exists for conversational latency, so it
+  # opens only when a chat turn was handled.
+  if ($script:JarvisChatTurnHandled -and (Test-ChatEnabled -VaultPath $VAULT)) {
+    $warmUntil = (Get-Date).AddMinutes(5)
+    while ((Get-Date) -lt $warmUntil) {
+      try {
+        $m = Invoke-PollOnce -Cred $cred -TimeoutSec 50
+        $n += $m
+        if ($script:JarvisChatTurnHandled) { $warmUntil = (Get-Date).AddMinutes(5) }   # keep the window alive while he is talking
+      } catch {
+        Write-Warning $_.Exception.Message
+        Start-Sleep -Seconds 5
+      }
+    }
+  }
+  Write-Host "Handled $n update(s)."
+  exit 0
+}
 
 if ($Poll) {
   Write-Host 'Long-polling for commands (Ctrl+C to stop). Self-only; only your chat id is honoured.'

@@ -16,6 +16,18 @@ Assert ((Resolve-TelegramCommand 'delete all my files') -eq 'help') "arbitrary t
 Assert ((Resolve-TelegramCommand '') -eq 'help') "empty -> help"
 Assert ((Resolve-TelegramCommand $null) -eq 'help') "null -> help"
 
+# --- -ChatEnabled adds exactly one outcome and changes nothing else (the whitelist stays the default) ---
+Assert ((Resolve-TelegramCommand 'how am I doing on the job hunt') -eq 'help') "chat OFF: arbitrary text -> help"
+Assert ((Resolve-TelegramCommand 'how am I doing on the job hunt' -ChatEnabled) -eq 'chat') "chat ON: arbitrary text -> chat"
+Assert ((Resolve-TelegramCommand '   ' -ChatEnabled) -eq 'help') "chat ON: whitespace-only -> help, never chat"
+Assert ((Resolve-TelegramCommand '' -ChatEnabled) -eq 'help') "chat ON: empty -> help"
+Assert ((Resolve-TelegramCommand $null -ChatEnabled) -eq 'help') "chat ON: null -> help"
+# the four real commands must be unreachable by chat - they win in BOTH modes
+Assert ((Resolve-TelegramCommand '/debrief' -ChatEnabled) -eq 'debrief') "chat ON: /debrief still debrief"
+Assert ((Resolve-TelegramCommand 'ping' -ChatEnabled) -eq 'status') "chat ON: ping still status"
+Assert ((Resolve-TelegramCommand 'note buy protein' -ChatEnabled) -eq 'note') "chat ON: note still note"
+Assert ((Resolve-TelegramCommand '/notes' -ChatEnabled) -eq 'notes') "chat ON: /notes still notes"
+
 # --- Test-TelegramSenderAllowed: the self-only gate (numeric/string ids must compare equal) ---
 Assert (Test-TelegramSenderAllowed 555 555) "same id allowed"
 Assert (Test-TelegramSenderAllowed '555' 555) "string vs numeric id allowed"
@@ -124,5 +136,195 @@ Assert ((@(Select-ActionableUpdates -Updates @() -Now $now -MaxAgeMinutes 10)).C
 # 6) a missing date must NOT silently swallow a real command (act, don't drop)
 $b = @( (U 1 '/debrief' $null) )
 Assert ((@(Select-ActionableUpdates -Updates $b -Now $now -MaxAgeMinutes 10)).Count -eq 1) "unknown date -> still acted on"
+
+# 7) chat messages are DATA like notes, never collapsed: two questions are two questions
+$b = @( (U 1 'how is the job hunt going' $fresh), (U 2 'and what about my balance' $fresh) )
+$act = @(Select-ActionableUpdates -Updates $b -Now $now -MaxAgeMinutes 10 -ChatEnabled)
+Assert ($act.Count -eq 2) "two chat questions both survive, got $($act.Count)"
+
+# 8) chat does not break the existing collapse: debriefs still collapse in the same batch
+$b = @( (U 1 '/debrief' $fresh), (U 2 'how is the job hunt going' $fresh), (U 3 '/debrief' $fresh) )
+$act = @(Select-ActionableUpdates -Updates $b -Now $now -MaxAgeMinutes 10 -ChatEnabled)
+Assert ($act.Count -eq 2) "1 collapsed debrief + 1 chat, got $($act.Count)"
+Assert (@($act | Where-Object { $_.UpdateId -eq 3 }).Count -eq 1) "the LAST /debrief still wins"
+
+# 9) without -ChatEnabled the old behaviour is intact: arbitrary text is 'help' and collapses
+$b = @( (U 1 'random text a' $fresh), (U 2 'random text b' $fresh) )
+$act = @(Select-ActionableUpdates -Updates $b -Now $now -MaxAgeMinutes 10)
+Assert ($act.Count -eq 1) "chat OFF: arbitrary text is help and still collapses, got $($act.Count)"
+
+# --- Invoke-TelegramCommand 'chat' / Invoke-PollOnce stale-question ack: the two behaviours added in
+# --- Task 7 that carry real stakes and had no test. Both rely on Send-Telegram (Telegram's HTTP API)
+# --- and Invoke-ChatTurn (spawns the claude CLI against the model) - the network/model surface that is
+# --- exactly why this wiring was never exercised before. Redefine both AFTER the dot-source above:
+# --- PowerShell resolves an unqualified function call by NAME at CALL time, searching the scope the
+# --- caller was DEFINED in - since Invoke-TelegramCommand/Invoke-PollOnce were defined by the dot-source
+# --- into THIS script's scope, a same-named function assigned here shadows the original for them too
+# --- (verified empirically before writing these: a function-calls-function dot-sourced setup, redefine
+# --- the callee afterward, the caller picks up the redefinition with no other change needed). Recording
+# --- calls instead of performing them is enough to assert what would have been sent/generated without
+# --- ever touching the network or the model.
+
+$script:MockSentMessages  = New-Object System.Collections.Generic.List[object]
+$script:MockChatTurnCalls = New-Object System.Collections.Generic.List[object]
+$script:MockChatTurnReturn = $null   # staged return value for the next Invoke-ChatTurn call(s)
+
+function Reset-TelegramMocks {
+  $script:MockSentMessages.Clear()
+  $script:MockChatTurnCalls.Clear()
+  $script:MockChatTurnReturn = $null
+}
+
+function Send-Telegram {
+  # Shadow of the real Telegram send (skill/bin/telegram-bot.ps1). Records instead of calling out.
+  param([string]$Text, $ToChatId, $Cred)
+  $script:MockSentMessages.Add([pscustomobject]@{ Text = $Text; ToChatId = $ToChatId })
+}
+
+function Invoke-ChatTurn {
+  # Shadow of the real headless-claude turn (skill/bin/telegram-chat.ps1). Records instead of spawning
+  # claude/the model and returns whatever the test staged in $script:MockChatTurnReturn.
+  param([string]$Prompt, [string]$ScopeDir, [int]$TimeoutSec = 180)
+  $script:MockChatTurnCalls.Add([pscustomobject]@{ Prompt = $Prompt; ScopeDir = $ScopeDir })
+  return $script:MockChatTurnReturn
+}
+
+# Write-ChatLog's default -LogPath is (Get-ChatLogPath), which points at the REAL
+# ~/.jarvis/telegram-chat.log on this machine. Redirect it to a throwaway temp file so these tests never
+# touch that file. Write-ChatLog itself is left REAL (not shadowed) - the point of this test is to prove
+# it actually wrote the reply that was sent, not to mock that away too.
+$script:MockChatLogPath = Join-Path $env:TEMP ('jarvis-telegram-bot-test-chatlog-' + [guid]::NewGuid().ToString('N') + '.log')
+function Get-ChatLogPath { return $script:MockChatLogPath }
+
+# $VAULT and $OffsetPath are plain script-scope variables bound when telegram-bot.ps1 was dot-sourced at
+# the top of this file; reassigning them here is visible to every function it defined, same mechanism as
+# the function shadowing above. Point $VAULT at a throwaway vault with chat turned on (so
+# Invoke-PollOnce's own Test-ChatEnabled check resolves true) and $OffsetPath at a throwaway file, so
+# these tests never read or write anything under the real ~/.jarvis on this machine.
+$origVault      = $VAULT
+$origOffsetPath = $OffsetPath
+$mockVault = Join-Path $env:TEMP ('jarvis-telegram-bot-test-vault-' + [guid]::NewGuid().ToString('N'))
+New-Item -ItemType Directory -Force -Path $mockVault | Out-Null
+Set-Content -Encoding UTF8 (Join-Path $mockVault 'CONFIG.md') "- modules:`n    telegram_chat: on"
+$VAULT         = $mockVault
+$mockOffsetPath = Join-Path $env:TEMP ('jarvis-telegram-bot-test-offset-' + [guid]::NewGuid().ToString('N') + '.json')
+$OffsetPath    = $mockOffsetPath
+
+$mockCred = [pscustomobject]@{ ChatId = 555; Token = 'test-token-not-real' }
+
+# ===== Invoke-TelegramCommand 'chat': a failed turn must never reach Alex as Jarvis' own voice =====
+# Each message below is deliberately free of bank/job/calendar keywords, so Get-ChatPrefetch resolves to
+# no collectors and Invoke-ChatPrefetch returns immediately without running any real collector script.
+
+Reset-TelegramMocks
+$script:MockChatTurnReturn = $null
+Invoke-TelegramCommand -Command 'chat' -Text 'Tell me a joke, Sir' -Cred $mockCred
+Assert ($script:MockSentMessages.Count -eq 1) "null Invoke-ChatTurn: exactly one Send-Telegram call, got $($script:MockSentMessages.Count)"
+Assert ($null -ne $script:MockSentMessages[0].Text -and $script:MockSentMessages[0].Text -ne '') "null Invoke-ChatTurn: sent text is never raw `$null or empty"
+Assert ($script:MockSentMessages[0].Text -eq 'That one got away from me, Sir - the run timed out. Try again, or ask me at the desk.') "null Invoke-ChatTurn: substituted with the butler-voiced apology, got '$($script:MockSentMessages[0].Text)'"
+$loggedNull = Get-Content -LiteralPath $script:MockChatLogPath -Raw
+Assert ($loggedNull -match [regex]::Escape($script:MockSentMessages[0].Text)) "null case: the logged reply matches what was sent"
+Remove-Item -LiteralPath $script:MockChatLogPath -Force -ErrorAction SilentlyContinue
+
+Reset-TelegramMocks
+$script:MockChatTurnReturn = ''
+Invoke-TelegramCommand -Command 'chat' -Text 'Tell me a joke, Sir' -Cred $mockCred
+Assert ($script:MockSentMessages.Count -eq 1) "empty-string Invoke-ChatTurn: exactly one Send-Telegram call, got $($script:MockSentMessages.Count)"
+Assert ($null -ne $script:MockSentMessages[0].Text -and $script:MockSentMessages[0].Text -ne '') "empty-string Invoke-ChatTurn: sent text is never raw `$null or empty"
+Assert ($script:MockSentMessages[0].Text -eq 'That one got away from me, Sir - the run timed out. Try again, or ask me at the desk.') "empty-string Invoke-ChatTurn: substituted with the butler-voiced apology, got '$($script:MockSentMessages[0].Text)'"
+$loggedEmpty = Get-Content -LiteralPath $script:MockChatLogPath -Raw
+Assert ($loggedEmpty -match [regex]::Escape($script:MockSentMessages[0].Text)) "empty case: the logged reply matches what was sent"
+Remove-Item -LiteralPath $script:MockChatLogPath -Force -ErrorAction SilentlyContinue
+
+Reset-TelegramMocks
+$script:MockChatTurnReturn = 'The meaning of life is 42, Sir.'
+Invoke-TelegramCommand -Command 'chat' -Text 'Tell me a joke, Sir' -Cred $mockCred
+Assert ($script:MockSentMessages.Count -eq 1) "normal reply: exactly one Send-Telegram call, got $($script:MockSentMessages.Count)"
+Assert ($script:MockSentMessages[0].Text -eq 'The meaning of life is 42, Sir.') "normal reply is sent UNCHANGED, got '$($script:MockSentMessages[0].Text)'"
+$loggedNormal = Get-Content -LiteralPath $script:MockChatLogPath -Raw
+Assert ($loggedNormal -match [regex]::Escape('The meaning of life is 42, Sir.')) "normal case: the logged reply matches what was sent"
+Remove-Item -LiteralPath $script:MockChatLogPath -Force -ErrorAction SilentlyContinue
+
+# ===== Invoke-PollOnce: the stale-question ack must fire ONLY for chat, and must never call the model =====
+# getUpdates goes through Invoke-TelegramApi directly (a separate call site from Send-Telegram), so
+# shadow that too - but only answer 'getUpdates'. A 'sendMessage' call reaching this shadow would mean
+# Send-Telegram itself got bypassed somewhere, which is exactly the kind of routing regression to catch.
+
+function New-FakeUpdate {
+  param([int]$Id, $ChatId, [string]$Text, [double]$MinutesAgo)
+  $unix = [DateTimeOffset]::UtcNow.AddMinutes(-$MinutesAgo).ToUnixTimeSeconds()
+  return [pscustomobject]@{
+    update_id = $Id
+    message   = [pscustomobject]@{
+      message_id = $Id
+      chat       = [pscustomobject]@{ id = $ChatId }
+      text       = $Text
+      date       = $unix
+    }
+  }
+}
+
+$script:MockGetUpdatesResult = @()
+function Invoke-TelegramApi {
+  param([string]$Token, [string]$Method, [hashtable]$Body)
+  if ($Method -eq 'getUpdates') { return [pscustomobject]@{ ok = $true; result = @($script:MockGetUpdatesResult) } }
+  throw "test double: unexpected Invoke-TelegramApi -Method '$Method' - sendMessage must go through the Send-Telegram shadow, not here"
+}
+
+# 10) a stale chat message: exactly one acknowledgement, and the model is never called for it
+Reset-TelegramMocks
+$script:MockGetUpdatesResult = @( (New-FakeUpdate -Id 501 -ChatId 555 -Text 'how is the weather today' -MinutesAgo 30) )
+$handled = Invoke-PollOnce -Cred $mockCred -TimeoutSec 5
+Assert ($handled -eq 0) "stale chat: nothing counted as handled, got $handled"
+Assert ($script:MockSentMessages.Count -eq 1) "stale chat: exactly one acknowledgement sent, got $($script:MockSentMessages.Count)"
+Assert ($script:MockSentMessages[0].Text -match 'let it lie') "stale chat: the sent text is the stale-question acknowledgement, got '$($script:MockSentMessages[0].Text)'"
+Assert ($script:MockChatTurnCalls.Count -eq 0) "stale chat: Invoke-ChatTurn must NEVER be called for a stale question (no model call), got $($script:MockChatTurnCalls.Count) call(s)"
+
+# 11) a stale /debrief: total silence preserved - the 2026-07-16 fix, still correct, must stay silent
+Reset-TelegramMocks
+$script:MockGetUpdatesResult = @( (New-FakeUpdate -Id 601 -ChatId 555 -Text '/debrief' -MinutesAgo 30) )
+$handled = Invoke-PollOnce -Cred $mockCred -TimeoutSec 5
+Assert ($handled -eq 0) "stale /debrief: nothing counted as handled, got $handled"
+Assert ($script:MockSentMessages.Count -eq 0) "stale /debrief: total silence preserved - no ack, no message at all, got $($script:MockSentMessages.Count)"
+Assert ($script:MockChatTurnCalls.Count -eq 0) "stale /debrief: no model call either"
+
+# 12) a superseded chat message (an older question overtaken, in the same batch, by a fresh one) is
+# acknowledged, not silently dropped - while the fresh question next to it still gets a real, unmodified
+# reply. Chat is never collapsed (test 7/8 above), so the ONLY way a chat update can be missing from the
+# actionable set is staleness; this proves that being "superseded" by a newer question in the same poll
+# does not make the older one fall through to silence the way a superseded /debrief correctly does.
+Reset-TelegramMocks
+$script:MockChatTurnReturn = 'Fresh answer, Sir.'
+$script:MockGetUpdatesResult = @(
+  (New-FakeUpdate -Id 701 -ChatId 555 -Text 'what did you think of my old plan' -MinutesAgo 30),
+  (New-FakeUpdate -Id 702 -ChatId 555 -Text 'what do you think of my new plan'  -MinutesAgo 1)
+)
+$handled = Invoke-PollOnce -Cred $mockCred -TimeoutSec 5
+Assert ($handled -eq 1) "superseded+fresh chat: exactly the fresh one is handled, got $handled"
+Assert ($script:MockSentMessages.Count -eq 2) "superseded+fresh chat: one ack + one real reply sent, got $($script:MockSentMessages.Count)"
+Assert (@($script:MockSentMessages | Where-Object { $_.Text -match 'let it lie' }).Count -eq 1) "the superseded question is acknowledged, not silently dropped"
+Assert (@($script:MockSentMessages | Where-Object { $_.Text -eq 'Fresh answer, Sir.' }).Count -eq 1) "the fresh question still gets a real, unmodified reply"
+Assert ($script:MockChatTurnCalls.Count -eq 1) "only the fresh question reaches the model, the superseded one does not"
+Assert ($script:JarvisChatTurnHandled) "Fix 5: a real chat turn being handled DOES set the chat-turn flag (the warm window is allowed to open)"
+
+# 13) Fix 5: the warm window (see -Once in telegram-bot.ps1) exists for CONVERSATIONAL latency. The old
+# --- gate was '$n -gt 0' - ANY handled command, so texting /status held the process open for 5 minutes
+# --- for something that never needed it. Prove a handled NON-chat command (a note) leaves the
+# --- chat-turn flag false, even though it is counted in $handled same as before.
+Reset-TelegramMocks
+$script:JarvisChatTurnHandled = $true   # poison the flag first so a wrongly-left-true value cannot pass silently
+$script:MockGetUpdatesResult = @( (New-FakeUpdate -Id 801 -ChatId 555 -Text 'note buy protein' -MinutesAgo 1) )
+$handled = Invoke-PollOnce -Cred $mockCred -TimeoutSec 5
+Assert ($handled -eq 1) "Fix 5: the non-chat command is still handled normally, got $handled"
+Assert (-not $script:JarvisChatTurnHandled) "Fix 5: a handled NON-chat command must leave the chat-turn flag false, so the warm window stays shut"
+Assert ($script:MockChatTurnCalls.Count -eq 0) "Fix 5: a non-chat command never calls the model"
+
+# clean up the throwaway temp state BEFORE restoring the script-scope variables these tests borrowed -
+# reassigning $OffsetPath back to the real path first would make this delete the wrong (real) file
+Remove-Item -LiteralPath $script:MockChatLogPath -Force -ErrorAction SilentlyContinue
+Remove-Item -LiteralPath $mockVault -Recurse -Force -ErrorAction SilentlyContinue
+Remove-Item -LiteralPath $mockOffsetPath -Force -ErrorAction SilentlyContinue
+$VAULT      = $origVault
+$OffsetPath = $origOffsetPath
 
 Write-Host "telegram-bot: ALL PASS"
