@@ -17,6 +17,20 @@ Assert (-not (Test-ChatEnabled -VaultPath $tmp)) "explicit 'off' disables chat"
 Set-Content -Encoding UTF8 (Join-Path $tmp 'CONFIG.md') "- modules:`n    telegram: on"
 Assert (-not (Test-ChatEnabled -VaultPath $tmp)) "key absent -> disabled (fail closed)"
 
+# --- Fix 3: a kill switch must never fail OPEN on a value nobody meant as "enabled". The old regex
+# --- matched '(on|off)\b' and read the CAPTURED WORD, so 'on-demand' matched 'on' (a hyphen is a
+# --- non-word character, so the word boundary is satisfied between 'n' and '-') and turned the entire
+# --- remote chat surface ON. Only an exact 'on' may enable; every near miss disables.
+foreach ($malformed in @('on-demand', 'on demand', 'on!', 'onx', 'on-call', 'true', 'yes', 'ON-DEMAND', 'on # for now', '')) {
+  Set-Content -Encoding UTF8 (Join-Path $tmp 'CONFIG.md') "- modules:`n    telegram_chat: $malformed"
+  Assert (-not (Test-ChatEnabled -VaultPath $tmp)) "malformed kill-switch value '$malformed' must read as DISABLED, never as enabled"
+}
+# ...while the valid values keep working, including with trailing whitespace and odd casing
+foreach ($enabled in @('on', 'ON', 'On', "on   ")) {
+  Set-Content -Encoding UTF8 (Join-Path $tmp 'CONFIG.md') "- modules:`n    telegram_chat: $enabled"
+  Assert (Test-ChatEnabled -VaultPath $tmp) "'$enabled' must still enable chat"
+}
+
 Remove-Item (Join-Path $tmp 'CONFIG.md') -Force
 Assert (-not (Test-ChatEnabled -VaultPath $tmp)) "no CONFIG.md -> disabled (fail closed)"
 
@@ -353,10 +367,31 @@ Assert ($allowOccurrences -eq 1) "exactly one --allowedTools in telegram-chat.ps
 # bare substring match would also pass if the flag only showed up in a comment or an unrelated
 # string. Isolate the actual claude invocation block (from the call operator through the discarded
 # stderr redirect that ends it) and require the flag inside THAT block.
-$invocationBlock = [regex]::Match($chatSrc, '&\s*claude\s+(?:-p|--print)\b[\s\S]*?2>\$null')
-Assert ($invocationBlock.Success) "could not locate the claude invocation block in telegram-chat.ps1"
+# --- Prompt-marshalling fix, guard repair 1: the block regex used to be terminated by a bare
+# --- '2>$null', and there are three of those in the file. Deleting the redirect from the claude line
+# --- did NOT fail .Success - the lazy match simply ran on to the taskkill '2>$null' further down and
+# --- the block grew from 227 to 1238 characters, swallowing the whole timeout/tree-kill region. Every
+# --- flag assertion below then still passed on that widened block, so the "the flag is ON THE
+# --- INVOCATION, not merely somewhere in the file" property those assertions exist to provide was
+# --- destroyed while this suite stayed green. Anchor the terminator to the invocation's OWN tail so
+# --- dropping the stderr redirect (itself a real regression - see the stderr-discard property below)
+# --- fails loudly here instead.
+$invocationBlock = [regex]::Match($chatSrc, '&\s*claude\s+(?:-p|--print)\b[\s\S]*?--output-format\s+text\s+2>\$null')
+Assert ($invocationBlock.Success) "could not locate the claude invocation block in telegram-chat.ps1 (it must end with --output-format text 2>`$null)"
 Assert ($invocationBlock.Value -match '--strict-mcp-config') "MCP servers must be disabled ON THE INVOCATION ITSELF: connected servers would restore an outbound channel"
-Assert ($chatSrc -match '--add-dir') "the read scope must be pinned with --add-dir"
+
+# --- Guard repair 2: '$chatSrc -match ''--add-dir''' was ALREADY DEFEATED on master. The literal
+# --- appears on three lines, two of them comments, so deleting the real flag line outright left this
+# --- assertion green and the read-scope pin it claims to protect completely unguarded. Bind it to the
+# --- invocation AND to $dir specifically: '--add-dir $HOME' or '--add-dir (Split-Path $dir)' would
+# --- widen the agent's reach past the one directory Alex chose while a bare '--add-dir' still matched.
+Assert ($invocationBlock.Value -match '--add-dir\s+\$dir\b') 'the read scope must be pinned with --add-dir $dir ON THE INVOCATION - a bare --add-dir match is satisfied by the comments alone, and a different value widens the scope'
+
+# --- Guard repair 3: nothing anywhere banned merging stderr into stdout, even though discarding it is
+# --- a stated security property (CLI error text carries file paths and auth-error fragments, and
+# --- merging it is how that text used to reach Alex as a normal-looking Jarvis reply). Must be scoped
+# --- to the invocation: a whole-file check is already False today because a comment discusses '2>&1'.
+Assert ($invocationBlock.Value -notmatch '2>&1') "the invocation must not merge stderr into stdout - CLI error text (file paths, stack traces, auth fragments) would be returned to Alex as a reply"
 
 # --- Fix 1: the guard pinned the MCP payload string (the Set-Content -Value literal below) but never
 # --- bound it to what --mcp-config actually loads. Changing the invocation to
@@ -381,9 +416,47 @@ Assert ($chatSrc -match 'Set-Location\s+-LiteralPath\s+\$dir\s+-ErrorAction\s+St
 
 $jobBlockMatch = [regex]::Match($chatSrc, 'Start-Job\s+-ScriptBlock\s*\{([\s\S]*?)\}\s*-ArgumentList')
 Assert ($jobBlockMatch.Success) "could not locate the job scriptblock body in telegram-chat.ps1"
-$jobStatements = @(($jobBlockMatch.Groups[1].Value -split '\r?\n') | ForEach-Object { $_.Trim() } | Where-Object { $_ -and $_ -notmatch '^#' -and $_ -notmatch '^param\(' })
+$jobBody = $jobBlockMatch.Groups[1].Value
+$jobStatements = @(($jobBody -split '\r?\n') | ForEach-Object { $_.Trim() } | Where-Object { $_ -and $_ -notmatch '^#' -and $_ -notmatch '^param\(' })
 Assert ($jobStatements.Count -gt 0) "the job scriptblock appears to have no executable statements"
 Assert ($jobStatements[0] -match '^Set-Location\s+-LiteralPath\s+\$dir\s+-ErrorAction\s+Stop\b') "Set-Location must be the FIRST executable statement in the job scriptblock (the pin is worthless if something reads before it), got: '$($jobStatements[0])'"
+
+# --- CRITICAL: HOW THE PROMPT REACHES CLAUDE ---------------------------------------------------
+# Nothing in this guard ever referenced the prompt on the invocation line. That prompt-shaped hole is
+# precisely why eleven review rounds could not see the bug this section now pins: deleting the prompt
+# from the invocation entirely left all 37 assertions green. The prompt used to be passed as a NATIVE
+# ARGUMENT ('claude -p $p'), and PS 5.1 wraps an argument containing whitespace in quotes without
+# escaping the quotes already inside it - so a realistic prompt (collector JSON, or any history line
+# carrying a quoted phrase) was split across extra argv entries and SILENTLY TRUNCATED. Measured on a
+# real assembled prompt: 2309 characters in, 1632 arrived, argc 24 instead of 15, Alex's message gone
+# and BOTH nonce END markers gone - leaving untrusted collector text as the last, unfenced thing the
+# model read. Live, that returned a fluent, confident answer to a question never asked. Exit code 0.
+#
+# The prompt now travels on STDIN, which is byte-exact. These assertions make that irreversible.
+Assert ($jobBody -match '\$stdout\s*=\s*\$p\s*\|\s*&\s*claude\s+(?:-p|--print)') "the prompt must be PIPED into claude (`$p | & claude -p ...), not passed as a native argument - argv marshalling silently truncates any prompt containing a quoted phrase"
+Assert ($invocationBlock.Value -notmatch 'claude\s+(?:-p|--print)(?:\s|`)*\$') "-p/--print must carry NO positional value: passing the prompt on the command line as well as stdin means claude reads the SHREDDED argv copy and ignores stdin, restoring the bug with this suite green"
+
+# stdin is encoded with $OutputEncoding, which defaults to us-ascii in PS 5.1 - without this line every
+# non-ASCII character (em dashes in Jarvis's own replies, which come back as history; accented company
+# names; emoji from the phone) is silently replaced with '?'. Measured: U+2014 arrived as 0x3F. It must
+# be set INSIDE the job: the identical assignment in the parent script scope does not reach the job
+# runspace (measured - still mangled), so a tidy-up that hoists it to the top of the file would quietly
+# reintroduce the same silent-corruption class this whole section exists to eliminate.
+Assert ($jobBody -match '\$OutputEncoding\s*=\s*New-Object\s+System\.Text\.UTF8Encoding\(\s*\$false\s*\)') 'the job must set $OutputEncoding to a no-BOM UTF8Encoding INSIDE the scriptblock, or stdin is encoded us-ascii and every non-ASCII character silently becomes a question mark'
+$encIdx = $jobBody.IndexOf('$OutputEncoding')
+$locIdx = $jobBody.IndexOf('Set-Location')
+Assert ($locIdx -ge 0 -and $encIdx -gt $locIdx) 'the $OutputEncoding assignment must come AFTER Set-Location - the scope pin has to stay the first statement in the job'
+
+# --input-format is what tells claude the piped bytes are a plain-text prompt. 'stream-json' expects a
+# JSON envelope instead and would discard a plain prompt, so pin the value rather than its presence.
+if ($invocationBlock.Value -match '--input-format\s+(\S+)') {
+  Assert ($Matches[1] -eq 'text') "--input-format on the invocation must be 'text' (the piped prompt is plain text), got '$($Matches[1])'"
+}
+
+# --- The job body must never rewrite the prompt either. '$p = $p.Substring(0,100)' inserted here
+# --- passes every other assertion in this guard - including the first-statement check - while
+# --- silently truncating the prompt: the exact "quiet confident wrong" failure the fix removes.
+Assert ($jobBody -notmatch '\$p\b\s*(=|\+=)') "the job scriptblock must never assign to the prompt parameter - a rewrite there truncates the prompt while every other check here stays green"
 
 # --- Critical 2 fix: the MCP config literal moved out of the invocation line into a separate
 # --- Set-Content -Value string (to dodge a PS 5.1 native-argument quoting bug), and no assertion
@@ -393,6 +466,11 @@ Assert ($jobStatements[0] -match '^Set-Location\s+-LiteralPath\s+\$dir\s+-ErrorA
 # --- written to disk is exactly the empty-server-map literal.
 $mcpValue = [regex]::Match($chatSrc, "Set-Content[^\r\n]*-Value\s+'(\{[^\r\n']*\})'")
 Assert ($mcpValue.Success) "could not locate the Set-Content line writing the MCP config payload"
+# [regex]::Match takes the FIRST hit, so a second brace-literal Set-Content added ABOVE the real one
+# would be validated in its place while the actual MCP payload was widened to declare a live server.
+# Pin the count so the decoy cannot exist.
+$mcpValueCount = ([regex]::Matches($chatSrc, "Set-Content[^\r\n]*-Value\s+'(\{[^\r\n']*\})'")).Count
+Assert ($mcpValueCount -eq 1) "exactly one brace-literal Set-Content line may exist, or the assertion below can be pointed at a decoy while the real MCP payload is widened, found $mcpValueCount"
 Assert ($mcpValue.Groups[1].Value -eq '{"mcpServers":{}}') "the MCP config payload written to disk must be exactly {`"mcpServers`":{}}, got '$($mcpValue.Groups[1].Value)'"
 
 # --- Important 7 fix: the checks above only ever inspected the CONSTANTS ($JarvisChatAllowedTools /
@@ -435,7 +513,10 @@ Assert ($chatSrc -notmatch '\(\s*\$script:JarvisChatDisallowedTools') "the disal
 # --- scriptblock never assigns to allow/deny, and assert the param()/-ArgumentList shapes directly.
 Assert ($chatSrc -notmatch '\$(allow|deny)\s*(=|\+=)') "the job scriptblock must never assign to the allow or deny parameter - a rebind there would widen the effective tool set while every other check in this guard stays green"
 Assert ($chatSrc -match 'param\(\s*\$p\s*,\s*\$allow\s*,\s*\$deny\s*,\s*\$dir\s*,\s*\$tok\s*,\s*\$cfgPath\s*,\s*\$pidFile\s*\)') "the job scriptblock's param() must bind p, allow, deny, dir, tok, cfgPath, pidFile in that exact order"
-Assert ($chatSrc -match '-ArgumentList\s+\$Prompt,\s*\$script:JarvisChatAllowedTools,\s*\$script:JarvisChatDisallowedTools,\s*\$ScopeDir,\s*\$tok,\s*\$cfgPath,\s*\$pidFile') "-ArgumentList must bind Prompt, AllowedTools, DisallowedTools, ScopeDir, tok, cfgPath, pidFile in that exact order - swapping allow and deny here would bind the deny list into allow with no assignment and no concatenation anywhere"
+# END-ANCHORED on purpose: the un-anchored form silently passed when an 8th argument was appended, so
+# a new entry could enter the job completely unscrutinised while this assertion reported the argument
+# binding as verified. The list must match the param() tuple above exactly - no more, no fewer.
+Assert ($chatSrc -match '-ArgumentList\s+\$Prompt,\s*\$script:JarvisChatAllowedTools,\s*\$script:JarvisChatDisallowedTools,\s*\$ScopeDir,\s*\$tok,\s*\$cfgPath,\s*\$pidFile\s*(\r?\n|$)') "-ArgumentList must bind EXACTLY Prompt, AllowedTools, DisallowedTools, ScopeDir, tok, cfgPath, pidFile in that order and nothing more - swapping allow and deny here would bind the deny list into allow with no assignment and no concatenation anywhere, and an appended argument would enter the job unscrutinised"
 
 # flags that make the allowlist moot entirely must never appear, in any documented spelling (catches 3)
 foreach ($bad in @('--dangerously-skip-permissions', '--allow-dangerously-skip-permissions', '--permission-mode')) {
@@ -519,5 +600,193 @@ Remove-Item $fileAsScope -Force -ErrorAction SilentlyContinue
 Assert ($null -eq (Invoke-ChatTurn -Prompt 'hi')) "Fix 6: omitted -ScopeDir -> null, no throw, no Start-Job"
 $ctSw.Stop()
 Assert ($ctSw.Elapsed.TotalSeconds -lt 10) "Fix 6: all five environment-not-ready paths together must return fast - a real Start-Job/claude call would dominate this, took $($ctSw.Elapsed.TotalSeconds)s"
+
+# --- Fix 2 (read scope): Test-ChatScopeNarrow ---------------------------------------------------
+# The agent's read scope used to be correct only BY CONFIGURATION: -ScopeDir is handed vault_path from
+# ~/.jarvis/config.json, which happens to point at one project folder. Repoint that single key at the
+# vault root and the phone could read every project in the vault, with nothing failing and nothing
+# said. Asserted on SHAPE and RELATIONSHIP only - a literal directory here would be a personal path,
+# which tests/no-personal-values.Tests.ps1 fails the build on, and a stranger's vault differs anyway.
+$scopeTmp = Join-Path $env:TEMP ('jarvis-scope-test-' + [guid]::NewGuid().ToString('N'))
+New-Item -ItemType Directory -Force -Path $scopeTmp | Out-Null
+try {
+  # a plain project-notes directory is fine
+  Assert (Test-ChatScopeNarrow -Path $scopeTmp) "a plain leaf directory must be an acceptable read scope"
+  # blank/missing input fails closed
+  Assert (-not (Test-ChatScopeNarrow -Path ''))    "an empty scope must be refused"
+  Assert (-not (Test-ChatScopeNarrow -Path '   ')) "a whitespace-only scope must be refused"
+  Assert (-not (Test-ChatScopeNarrow -Path $null)) "a null scope must be refused"
+
+  # a drive root is the broadest scope there is
+  $driveRoot = [IO.Path]::GetPathRoot([IO.Path]::GetFullPath($scopeTmp))
+  Assert (-not (Test-ChatScopeNarrow -Path $driveRoot)) "a drive root must never be an acceptable read scope"
+
+  # the scope must not BE or CONTAIN the directory holding the OAuth token, the Telegram credential and
+  # the plaintext chat log. Invoke-ChatPrefetch already relies on this ("lives OUTSIDE the agent's
+  # scope, so the agent cannot read it itself") and nothing enforced it. Reading is the one thing this
+  # agent CAN do, so a scope that reaches the secrets directory is the worst possible widening.
+  Assert (-not (Test-ChatScopeNarrow -Path $HOME)) "the home directory must be refused: it contains the .jarvis secrets directory (token, Telegram credential, plaintext chat log)"
+  Assert (-not (Test-ChatScopeNarrow -Path (Join-Path $HOME '.jarvis'))) "the secrets directory itself must never be the agent's read scope"
+
+  # THE ACTUAL REGRESSION: a vault ROOT, recognised by shape (two or more numbered project folders
+  # side by side), not by name. One numbered folder is a project that happens to hold a numbered
+  # subfolder and stays acceptable, so the rule bites the repoint without punishing a normal leaf.
+  $vaultRootish = Join-Path $scopeTmp 'vaultroot'
+  New-Item -ItemType Directory -Force -Path (Join-Path $vaultRootish '02-something') | Out-Null
+  New-Item -ItemType Directory -Force -Path (Join-Path $vaultRootish '12-jarvis')    | Out-Null
+  Assert (-not (Test-ChatScopeNarrow -Path $vaultRootish)) "a directory holding several numbered project folders is a vault ROOT, not one project's notes - it must be refused"
+  Assert (Test-ChatScopeNarrow -Path (Join-Path $vaultRootish '12-jarvis')) "the numbered project folder itself is the narrow leaf and must remain acceptable"
+  $oneNumbered = Join-Path $scopeTmp 'oneonly'
+  New-Item -ItemType Directory -Force -Path (Join-Path $oneNumbered '01-notes') | Out-Null
+  Assert (Test-ChatScopeNarrow -Path $oneNumbered) "a single numbered subfolder is not a vault root and must not be refused"
+
+  # and Invoke-ChatTurn must enforce it itself, so no caller can opt out by passing a wide directory
+  $wideSw = [System.Diagnostics.Stopwatch]::StartNew()
+  Assert ($null -eq (Invoke-ChatTurn -Prompt 'hi' -ScopeDir $vaultRootish)) "Invoke-ChatTurn must refuse a vault-root-shaped scope, not merely document that callers should not pass one"
+  Assert ($null -eq (Invoke-ChatTurn -Prompt 'hi' -ScopeDir $HOME)) "Invoke-ChatTurn must refuse a scope that reaches the .jarvis secrets directory"
+  $wideSw.Stop()
+  Assert ($wideSw.Elapsed.TotalSeconds -lt 10) "a refused scope must return before Start-Job, took $($wideSw.Elapsed.TotalSeconds)s"
+} finally {
+  Remove-Item $scopeTmp -Recurse -Force -ErrorAction SilentlyContinue
+}
+
+# --- PROMPT FIDELITY: the assembled prompt must reach claude BYTE-IDENTICALLY --------------------
+# This is the test whose absence let a silent-truncation bug survive eleven green review rounds. The
+# whole suite only ever called Invoke-ChatTurn -Prompt 'hi' - no whitespace, no quotes, so PS 5.1
+# never wrapped the argument and it marshalled perfectly. One double quote is enough to break it, and
+# the persona itself ships two (the word "Sir"), so in production EVERY turn was corrupted.
+#
+# No model call, no network, no Telegram send: a shim on PATH stands in for claude, records stdin
+# byte-for-byte and prints a sentinel. Asserting exit 0 would NOT have caught the original bug - the
+# broken run exited 0 with a fluent reply - so the assertion is byte-identity of what was DELIVERED.
+$fidDir = Join-Path $env:TEMP ('jarvis-chat-fidelity-' + [guid]::NewGuid().ToString('N'))
+New-Item -ItemType Directory -Force -Path $fidDir | Out-Null
+$fidScope = Join-Path $fidDir 'scope'
+New-Item -ItemType Directory -Force -Path $fidScope | Out-Null
+$shimDir  = Join-Path $fidDir 'shim'
+New-Item -ItemType Directory -Force -Path $shimDir | Out-Null
+$stdinCap = Join-Path $fidDir 'stdin.bin'
+
+# The shim never references %* - a prompt containing '&', '|' or '>' would break a shim that did, and
+# produce a misleading failure. It reads the raw stdin BYTES (Console.In would decode them as ANSI and
+# mangle exactly the non-ASCII this test exists to protect) and writes them verbatim.
+$shimCmd = @'
+@echo off
+powershell -NoProfile -Command "$i=[Console]::OpenStandardInput();$m=New-Object IO.MemoryStream;$i.CopyTo($m);[IO.File]::WriteAllBytes($env:JARVIS_CHAT_TEST_STDIN,$m.ToArray())"
+if "%JARVIS_CHAT_TEST_MODE%"=="quiet" goto done
+if "%JARVIS_CHAT_TEST_MODE%"=="blank" goto blank
+echo REPLY-SENTINEL
+goto done
+:blank
+echo.
+:done
+exit %JARVIS_CHAT_TEST_EXIT%
+'@
+Set-Content -Encoding ASCII -LiteralPath (Join-Path $shimDir 'claude.cmd') -Value $shimCmd
+
+# $HOME is READ-ONLY in Windows PowerShell 5.1, so this cannot be redirected to a temp directory.
+# Invoke-ChatTurn returns $null before ever reaching Start-Job unless the token file exists, so create
+# one only if absent - and never overwrite a real one.
+$fidTok = Join-Path $HOME '.jarvis\claude-token.xml'
+$fidTokCreated = $false
+if (-not (Test-Path $fidTok)) {
+  New-Item -ItemType Directory -Force -Path (Split-Path $fidTok) | Out-Null
+  ConvertTo-SecureString 'test-token-not-real' -AsPlainText -Force | Export-Clixml $fidTok
+  $fidTokCreated = $true
+}
+
+$fidPathSaved = $env:PATH
+try {
+  $env:PATH = $shimDir + ';' + $env:PATH
+  $env:JARVIS_CHAT_TEST_STDIN = $stdinCap
+  $env:JARVIS_CHAT_TEST_MODE  = ''
+  $env:JARVIS_CHAT_TEST_EXIT  = '0'
+
+  # non-ASCII is built from [char] codes, never as literals: this file must stay ASCII (PS 5.1 reads
+  # .ps1 as ANSI). U+2014 em dash, U+00E9 e-acute, and a surrogate pair (U+1F600) from a phone keyboard.
+  $emDash  = [char]0x2014
+  $eAcute  = [char]0x00E9
+  $emoji   = [string][char]0xD83D + [string][char]0xDE00
+  $bt      = [char]96    # backtick
+  $dq      = [char]34    # double quote
+  $cr      = [char]13
+  $lf      = [char]10
+
+  # (b) jobmail-shaped JSON with BACKSLASH-ESCAPED quotes inside values - the shape that shredded one
+  # real prompt into hundreds of argv entries.
+  $jobmailJson = '{"alerts":[{"from":"LinkedIn","subject":"Re: \"Graduate Engineer\" role","body":"They said \"next week\" is fine"}],"count":1}'
+  # (c) bank-shaped JSON - quotes AND many spaces together, the combination the original --mcp-config
+  # fix never exercised because '{"mcpServers":{}}' contains no spaces at all.
+  $bankJson = '{ "configured": true, "accounts": [ { "name": "Main Current Account", "balance": "1234.56", "currency": "EUR" } ], "as_of": "2026-07-19 06:00:11" }'
+  # (d) a history block carrying a quoted phrase - the silent-truncation trigger, near-certain after
+  # one real reply, and what produced a fluent answer to a stale question live.
+  $histBlock = "[2026-07-18T21:03:00] ALEX: did they say " + $dq + "next week" + $dq + " or later?" + "`n" +
+               "[2026-07-18T21:03:44] JARVIS: They said " + $dq + "next week" + $dq + ", Sir " + $emDash + " Thursday at the earliest."
+  # (f) PowerShell metacharacters, including a trailing backslash immediately before a quote (which
+  # escapes the closing quote PS itself added, swallowing the rest of the command line).
+  $metaChars = 'a b ' + $bt + ' $(Get-Content x) ${y} | & > % 50%% path\' + $dq + $dq + ' tail'
+  # (h) comfortably over 8192 characters, to catch command-line-length truncation nothing else would
+  $longPrompt = ('Sir, ' + $dq + 'quoted phrase' + $dq + ' and more text. ') * 400
+
+  # (R2) a REAL Build-ChatPrompt output, composed from the REAL persona, fence and nonce, not a
+  # hand-written approximation - so this corpus tracks the prompt assembly as it evolves.
+  $realNonce  = New-ChatNonce
+  $realPrompt = Build-ChatPrompt -Message ('Did they say ' + $dq + 'next week' + $dq + ' or later?') `
+                  -Persona (Get-ChatPersona) `
+                  -CollectorText ("## collector: jobmail`n" + $jobmailJson + "`n## collector: bank`n" + $bankJson) `
+                  -History $histBlock -Nonce $realNonce
+
+  $corpus = @(
+    @{ Name = 'baseline (the only shape the old suite ever tested)'; Text = 'hi' },
+    @{ Name = 'jobmail JSON with backslash-escaped quotes';          Text = $jobmailJson },
+    @{ Name = 'bank JSON: quotes and spaces together';               Text = $bankJson },
+    @{ Name = 'history block containing a quoted phrase';            Text = $histBlock },
+    @{ Name = 'non-ASCII: em dash, accent, emoji surrogate pair';    Text = ('Reply about caf' + $eAcute + ' plans ' + $emDash + ' soon ' + $emoji) },
+    @{ Name = 'PowerShell metacharacters and a trailing backslash';  Text = $metaChars },
+    @{ Name = 'lone CR, lone LF and CRLF together';                  Text = ('one' + $cr + 'two' + $lf + 'three' + $cr + $lf + 'four "quoted" five') },
+    @{ Name = 'prompt longer than 8192 characters';                  Text = $longPrompt },
+    @{ Name = 'REAL Build-ChatPrompt output (persona + fence)';      Text = $realPrompt }
+  )
+
+  $fidSw = [System.Diagnostics.Stopwatch]::StartNew()
+  foreach ($entry in $corpus) {
+    Remove-Item $stdinCap -Force -ErrorAction SilentlyContinue
+    $reply = Invoke-ChatTurn -Prompt $entry.Text -ScopeDir $fidScope -TimeoutSec 120
+    Assert (Test-Path $stdinCap) "prompt fidelity [$($entry.Name)]: claude was invoked but received NOTHING on stdin - the prompt is not being delivered"
+    $gotBytes = [IO.File]::ReadAllBytes($stdinCap)
+    $got  = [Text.Encoding]::UTF8.GetString($gotBytes)
+    # normalise line endings ONLY (the pipeline appends a trailing newline); nothing else is forgiven
+    $gotN  = ($got            -replace [string]$cr, '').Trim()
+    $wantN = ($entry.Text     -replace [string]$cr, '').Trim()
+    $diag  = "sent $($wantN.Length) chars / $(([regex]::Matches($wantN, [string]$dq)).Count) quotes, received $($gotN.Length) chars / $(([regex]::Matches($gotN, [string]$dq)).Count) quotes"
+    Assert ([string]::Equals($gotN, $wantN, [System.StringComparison]::Ordinal)) "prompt fidelity [$($entry.Name)]: the prompt did not arrive byte-identically ($diag)"
+    Assert ($reply -eq 'REPLY-SENTINEL') "prompt fidelity [$($entry.Name)]: a successful run must return the reply text, got '$reply'"
+  }
+  $fidSw.Stop()
+  # The shim returns in milliseconds. A slow run means it was NOT resolved and the real claude was
+  # invoked instead - which must fail loudly here rather than quietly making live model calls.
+  Assert ($fidSw.Elapsed.TotalSeconds -lt 120) "prompt fidelity: the whole corpus must run against the shim, not a real model - took $($fidSw.Elapsed.TotalSeconds)s"
+
+  # The failure contract still holds on the paths that DO reach the job (the existing five above never
+  # get that far). Note the suite had no passing-path coverage at all before this block either.
+  $env:JARVIS_CHAT_TEST_EXIT = '3'
+  $threw = $false
+  try { $rcFail = Invoke-ChatTurn -Prompt 'hi' -ScopeDir $fidScope -TimeoutSec 120 } catch { $threw = $true }
+  Assert (-not $threw) "Invoke-ChatTurn must never throw, even when claude exits non-zero"
+  Assert ($null -eq $rcFail) "a non-zero claude exit must degrade to `$null, never to raw output"
+
+  $env:JARVIS_CHAT_TEST_EXIT = '0'
+  $env:JARVIS_CHAT_TEST_MODE = 'blank'
+  Assert ($null -eq (Invoke-ChatTurn -Prompt 'hi' -ScopeDir $fidScope -TimeoutSec 120)) "a whitespace-only reply must degrade to `$null, not be sent to Alex as an empty message"
+
+  # an empty prompt degrades rather than discovering claude's empty-stdin behaviour inside a long job
+  Assert ($null -eq (Invoke-ChatTurn -Prompt '' -ScopeDir $fidScope)) "an empty prompt must degrade to `$null"
+  Assert ($null -eq (Invoke-ChatTurn -Prompt '   ' -ScopeDir $fidScope)) "a whitespace-only prompt must degrade to `$null"
+} finally {
+  $env:PATH = $fidPathSaved
+  Remove-Item Env:\JARVIS_CHAT_TEST_STDIN, Env:\JARVIS_CHAT_TEST_MODE, Env:\JARVIS_CHAT_TEST_EXIT -ErrorAction SilentlyContinue
+  Remove-Item $fidDir -Recurse -Force -ErrorAction SilentlyContinue
+  if ($fidTokCreated) { Remove-Item $fidTok -Force -ErrorAction SilentlyContinue }
+}
 
 Write-Host "telegram-chat: ALL PASS"

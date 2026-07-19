@@ -22,12 +22,19 @@ function Test-ChatEnabled {
   # Is free-form chat turned on? Reads CONFIG.md 'telegram_chat'. Absent, unreadable, or anything other
   # than 'on' -> FALSE. Fails closed on purpose: the closed command whitelist stays the default and
   # chat is the exception. Same shape as Get-DebriefChannel in jarvis-debrief.ps1.
+  #
+  # Fix 3: this used to match '(on|off)\b' and read the CAPTURED WORD, so a hand-edited
+  # 'telegram_chat: on-demand' matched 'on' (a hyphen is a non-word character, so \b is satisfied
+  # between 'n' and '-') and turned the whole remote chat surface ON. That is the wrong direction for
+  # a kill switch: a value its author clearly did not mean as "enabled" must never enable. Read the
+  # WHOLE value instead and require it to be exactly 'on' - 'on-demand', 'on x', 'ON!' and every other
+  # near miss now fall through to disabled, along with the absent and unreadable cases.
   param([string]$VaultPath)
   try {
     $cfgFile = Join-Path $VaultPath 'CONFIG.md'
     if (-not (Test-Path $cfgFile)) { return $false }
-    $m = [regex]::Match((Get-Content -LiteralPath $cfgFile -Raw), '(?m)^\s*-?\s*telegram_chat:\s*(on|off)\b')
-    if ($m.Success) { return ($m.Groups[1].Value.ToLower() -eq 'on') }
+    $m = [regex]::Match((Get-Content -LiteralPath $cfgFile -Raw), '(?m)^\s*-?\s*telegram_chat:[ \t]*([^\r\n]*)')
+    if ($m.Success) { return ($m.Groups[1].Value.Trim().ToLower() -eq 'on') }
   } catch { }
   return $false
 }
@@ -339,6 +346,46 @@ function Get-ChatHistory {
 $script:JarvisChatAllowedTools    = 'Read Glob Grep'
 $script:JarvisChatDisallowedTools = 'Bash Write Edit WebFetch WebSearch'
 
+function Test-ChatScopeNarrow {
+  # Fix 2: the read scope was correct only BY CONFIGURATION. Invoke-ChatTurn is handed vault_path from
+  # ~/.jarvis/config.json, which happens to resolve to the one project folder Alex chose. Repoint that
+  # single key at the vault ROOT and the phone can suddenly read every project folder in the vault -
+  # silently, with nothing failing and nothing said. A scope is a security decision, so it gets a check
+  # of its own rather than resting on a config value staying pointed where it was the day it was set.
+  #
+  # Asserted on SHAPE and RELATIONSHIP, never on a literal directory: no personal path may live in
+  # tracked source (tests/no-personal-values.Tests.ps1 fails the build on those), and a stranger's
+  # clone has a different vault anyway. Returns $true only for a directory that could plausibly be one
+  # project's notes. Fails CLOSED - a scope this cannot vouch for is refused, and Invoke-ChatTurn's
+  # contract turns that into the butler-voiced apology rather than a wider-than-intended agent.
+  param([string]$Path)
+  if ([string]::IsNullOrWhiteSpace($Path)) { return $false }
+  try {
+    $full = [IO.Path]::GetFullPath($Path).TrimEnd([char]92, [char]47)
+    # (a) A drive or filesystem root has no parent, and is the broadest scope that exists.
+    if ([string]::IsNullOrEmpty([IO.Path]::GetDirectoryName($full))) { return $false }
+    # (b) The scope must not BE, or CONTAIN, the directory holding the OAuth token, the Telegram
+    # credential and the PLAINTEXT chat log of everything Alex has ever pasted. Invoke-ChatPrefetch
+    # already leans on exactly this ("lives OUTSIDE the agent's scope, so the agent cannot read it
+    # itself") and nothing enforced it: a scope of the home directory, or of a drive root, hands a
+    # Read/Glob/Grep agent every secret this system owns, and reading is the one thing that agent CAN
+    # do. This rule needs no naming convention, so it holds on any machine.
+    $secrets = [IO.Path]::GetFullPath((Join-Path $HOME '.jarvis')).TrimEnd([char]92, [char]47)
+    if ($secrets.Equals($full, [StringComparison]::OrdinalIgnoreCase)) { return $false }
+    if ($secrets.StartsWith($full + [IO.Path]::DirectorySeparatorChar, [StringComparison]::OrdinalIgnoreCase)) { return $false }
+    # (c) A vault ROOT rather than one project's notes. The vault convention is one numbered folder per
+    # project, so a directory holding two or more of those is the parent of every project, not the leaf
+    # that was chosen. This is the exact repoint described above, and it is shape, not a name: a vault
+    # that does not use the convention simply never trips it, and no personal path is encoded either way.
+    $numbered = @(Get-ChildItem -LiteralPath $full -Directory -ErrorAction SilentlyContinue |
+                  Where-Object { $_.Name -match '^\d{2,}-' })
+    if ($numbered.Count -ge 2) { return $false }
+  } catch {
+    return $false
+  }
+  return $true
+}
+
 function Invoke-ChatTurn {
   # One headless turn. Returns the reply text, or $null if it timed out, failed, or the environment
   # was not ready (missing/corrupt token, missing scope dir) - the caller turns $null into a
@@ -357,6 +404,12 @@ function Invoke-ChatTurn {
   # (and an omitted argument raises one too, rather than prompting) which would propagate straight
   # into the poller loop - the exact failure mode this function exists to prevent. Degrade instead.
   if ([string]::IsNullOrWhiteSpace($ScopeDir)) { return $null }
+
+  # An empty or whitespace-only prompt is not reachable today (Build-ChatPrompt always emits the
+  # persona at minimum), but the prompt now travels on stdin and claude's behaviour on empty stdin
+  # under -p was never established against the installed CLI. Degrade rather than find out inside a
+  # 180-second job, consistent with the never-throw/$null contract above.
+  if ([string]::IsNullOrWhiteSpace($Prompt)) { return $null }
 
   # The read scope is a security decision Alex made (one directory, not "whatever the poller's
   # current directory happens to be"). -PathType Container rejects a FILE path here: a bare
@@ -380,6 +433,9 @@ function Invoke-ChatTurn {
   } catch {
     return $null
   }
+  # Fix 2: and the resolved scope must be NARROW - one project's notes, not the vault root, the home
+  # directory or a drive. Checked here rather than at the call site so no caller can opt out of it.
+  if (-not (Test-ChatScopeNarrow -Path $ScopeDir)) { return $null }
 
   # Headless auth: same long-lived subscription token the 08:30 wrapper uses. A corrupt token file
   # (truncated XML, or content that does not deserialize to a SecureString) is the same class of
@@ -438,15 +494,35 @@ function Invoke-ChatTurn {
       # before the long-running call so it is available the instant a timeout needs to kill the tree.
       Set-Content -LiteralPath $pidFile -Value $PID
       $env:CLAUDE_CODE_OAUTH_TOKEN = $tok
-      # No 2>&1: merging stderr into the output stream is exactly how a failed run's error text (file
-      # paths, stack traces, auth-error fragments) used to end up quoted back to Alex as a normal
-      # reply. Discard stderr and judge success from the exit code instead.
-      $stdout = & claude -p $p `
+      # PS 5.1 encodes a native command's STDIN using $OutputEncoding, which defaults to us-ascii:
+      # without this line every non-ASCII character is silently replaced with '?' - em dashes in
+      # Jarvis's own replies (which come straight back in as history), accented company names in job
+      # mail, emoji typed from the phone. Measured: U+2014 arrived as 0x3F. It MUST be set HERE, inside
+      # the job: the identical assignment in the parent script scope does NOT reach this runspace
+      # (measured - the prompt still arrived mangled), so a tidy-up that hoists it to the top of the
+      # file silently reintroduces exactly the corruption class the change below exists to remove. The
+      # no-BOM ctor is deliberate too: a host WITH a console prepends EF BB BF to the child's stdin,
+      # which would land at the very front of the prompt if this call were ever moved out of the job.
+      $OutputEncoding = New-Object System.Text.UTF8Encoding($false)
+      # THE PROMPT TRAVELS ON STDIN, NEVER AS AN ARGUMENT. PS 5.1 wraps a native argument containing
+      # whitespace in quotes WITHOUT escaping the quotes already inside it, and Windows then re-parses
+      # that with different rules - so a quote-heavy prompt is split across extra argv entries and
+      # SILENTLY TRUNCATED, exit 0, no error. Measured on a real assembled prompt: 2309 characters in,
+      # 1632 arrived, argc 24 instead of 15, Alex's actual message gone, and BOTH nonce END markers
+      # gone - which leaves untrusted collector text (email subjects) as the last, unfenced thing the
+      # model reads, dismantling the fence precisely in the case it was written to defend. Live, that
+      # produced a fluent confident answer to a question the model never saw. Same root cause already
+      # fixed above for the MCP config by writing a file and passing its path; stdin is byte-exact.
+      # -p therefore carries NO positional value: putting one back would make claude read the shredded
+      # argv and ignore stdin, restoring the bug with every structural check still green.
+      # Still no 2>&1 (see above): stderr stays discarded and success is judged from the exit code.
+      $stdout = $p | & claude -p `
         --allowedTools $allow `
         --disallowedTools $deny `
         --add-dir $dir `
         --strict-mcp-config --mcp-config $cfgPath `
         --model sonnet `
+        --input-format text `
         --output-format text 2>$null
       [pscustomobject]@{ Output = ($stdout | Out-String); ExitCode = $LASTEXITCODE }
     } -ArgumentList $Prompt, $script:JarvisChatAllowedTools, $script:JarvisChatDisallowedTools, $ScopeDir, $tok, $cfgPath, $pidFile
