@@ -48,13 +48,24 @@ function Test-CollectorErrorJson {
   # If a collector's stdout parses as JSON carrying a top-level 'error' property, that collector is
   # reporting failure IN-BAND (get-bank-data.ps1 does this by design - it always exits 0 so the feed
   # degrades rather than kills the debrief, and signals failure via {"configured":true,"error":...}
-  # instead). An unchecked exit code alone would miss this, so parse and check explicitly. Returns the
-  # error string, or $null if the text is not JSON or has no truthy top-level 'error'.
+  # instead). get-bank-data.ps1 also has three exit-0 "not set up yet" paths that carry NO 'error' key
+  # at all - {"configured":false,"reason":"...","setup":"..."} (no credential / no session state / no
+  # linked accounts) - so a falsy top-level 'configured' is treated as the same kind of in-band failure
+  # signal, surfacing 'reason' (or a generic fallback if 'reason' is absent for some reason). An
+  # unchecked exit code alone would miss either shape, so parse and check explicitly. Returns the
+  # error/reason string, or $null if the text is not JSON or carries neither failure shape.
   param([string]$Text)
   try {
     $parsed = $Text | ConvertFrom-Json -ErrorAction Stop
-    if ($null -ne $parsed -and ($parsed.PSObject.Properties.Name -contains 'error') -and $parsed.error) {
+    if ($null -eq $parsed) { return $null }
+    if (($parsed.PSObject.Properties.Name -contains 'error') -and $parsed.error) {
       return [string]$parsed.error
+    }
+    if (($parsed.PSObject.Properties.Name -contains 'configured') -and -not $parsed.configured) {
+      if (($parsed.PSObject.Properties.Name -contains 'reason') -and $parsed.reason) {
+        return [string]$parsed.reason
+      }
+      return 'not configured'
     }
   } catch { }
   return $null
