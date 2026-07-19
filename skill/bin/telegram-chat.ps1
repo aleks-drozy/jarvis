@@ -494,16 +494,7 @@ function Invoke-ChatTurn {
       # before the long-running call so it is available the instant a timeout needs to kill the tree.
       Set-Content -LiteralPath $pidFile -Value $PID
       $env:CLAUDE_CODE_OAUTH_TOKEN = $tok
-      # PS 5.1 encodes a native command's STDIN using $OutputEncoding, which defaults to us-ascii:
-      # without this line every non-ASCII character is silently replaced with '?' - em dashes in
-      # Jarvis's own replies (which come straight back in as history), accented company names in job
-      # mail, emoji typed from the phone. Measured: U+2014 arrived as 0x3F. It MUST be set HERE, inside
-      # the job: the identical assignment in the parent script scope does NOT reach this runspace
-      # (measured - the prompt still arrived mangled), so a tidy-up that hoists it to the top of the
-      # file silently reintroduces exactly the corruption class the change below exists to remove. The
-      # no-BOM ctor is deliberate too: a host WITH a console prepends EF BB BF to the child's stdin,
-      # which would land at the very front of the prompt if this call were ever moved out of the job.
-      $OutputEncoding = New-Object System.Text.UTF8Encoding($false)
+
       # THE PROMPT TRAVELS ON STDIN, NEVER AS AN ARGUMENT. PS 5.1 wraps a native argument containing
       # whitespace in quotes WITHOUT escaping the quotes already inside it, and Windows then re-parses
       # that with different rules - so a quote-heavy prompt is split across extra argv entries and
@@ -511,20 +502,151 @@ function Invoke-ChatTurn {
       # 1632 arrived, argc 24 instead of 15, Alex's actual message gone, and BOTH nonce END markers
       # gone - which leaves untrusted collector text (email subjects) as the last, unfenced thing the
       # model reads, dismantling the fence precisely in the case it was written to defend. Live, that
-      # produced a fluent confident answer to a question the model never saw. Same root cause already
-      # fixed above for the MCP config by writing a file and passing its path; stdin is byte-exact.
-      # -p therefore carries NO positional value: putting one back would make claude read the shredded
-      # argv and ignore stdin, restoring the bug with every structural check still green.
-      # Still no 2>&1 (see above): stderr stays discarded and success is judged from the exit code.
-      $stdout = $p | & claude -p `
-        --allowedTools $allow `
-        --disallowedTools $deny `
-        --add-dir $dir `
-        --strict-mcp-config --mcp-config $cfgPath `
-        --model sonnet `
-        --input-format text `
-        --output-format text 2>$null
-      [pscustomobject]@{ Output = ($stdout | Out-String); ExitCode = $LASTEXITCODE }
+      # produced a fluent confident answer to a question the model never saw.
+      #
+      # AND THE DELIVERY IS NOW VERIFIED, because "it went on stdin" was never the whole property -
+      # what matters is that the child READ ALL OF IT. Measured against the previous revision of this
+      # file, which used PowerShell's native pipeline ('$p | & claude -p ...'): a child that reads 100
+      # bytes of a 15271-character prompt and exits 0 sailed through EVERY gate below (job Completed,
+      # result non-null, ExitCode 0, non-empty output) and its fluent, confident reply to a prompt it
+      # never saw was returned to Alex as a success. PowerShell's NativeCommandProcessor raises NO
+      # error record when that pipe breaks - $Error.Count is 0 even with 2>&1 instead of 2>$null, so
+      # the discarded stderr was never the concealer - and the prompt size is attacker-influenced
+      # (check-job-mail.ps1 output, carrying email subjects, flows into it). Truncation cuts from the
+      # END and Build-ChatPrompt deliberately puts the nonce END markers last, so a short read
+      # dismantles the security fence and leaves untrusted collector text as the last unfenced thing
+      # the model reads. That is the exact failure mode the fence exists to prevent, so it must fail
+      # CLOSED rather than answer.
+      #
+      # Hence System.Diagnostics.Process instead of the native pipeline: the write is then OURS to
+      # observe. THREE observations are recorded, and the parent requires all three:
+      #   $delivered       - bytes actually handed to the pipe. A write that dies mid-prompt leaves
+      #                      this short of $promptBytes.Length, so a partial write is a NUMBER.
+      #   $drained         - WaitForPipeDrain() returns once the pipe's buffer is empty.
+      #   $exitedBeforeEof - whether the child had already exited at that moment.
+      #
+      # Each measured, because the obvious two are individually unsound here:
+      #   A short write is NOT reliably observable. Measured: the OS pipe buffer swallowed 65536 bytes
+      #   without ever blocking the write, so the whole realistic prompt range can be written in full
+      #   to a child that reads 100 bytes. Only a single oversized write blocks and throws.
+      #   A successful drain is NOT proof of consumption either. Measured: once the child exits, the
+      #   unread buffer is DISCARDED and WaitForPipeDrain then returns SUCCESS - it cannot distinguish
+      #   "the child read it all" from "the child died and the data was thrown away".
+      #
+      # What makes the pair sound is the third: EOF is ours to send, and it is sent only AFTER the
+      # drain. A child that reads its prompt from stdin cannot know the prompt has ended until it sees
+      # EOF, so it cannot legitimately exit before we close this handle. Therefore:
+      #   every byte written + buffer empty + child STILL RUNNING  ==>  the child read the whole prompt
+      # If the buffer emptied because the child died, the exit check sees it; if the child stalls with
+      # bytes unread, the drain blocks until it dies and the exit check sees that too. Measured across
+      # both shapes of early close (reads 100 bytes and exits; reads 8192 of 15271 and exits) and
+      # against a lazy-but-complete reader that stalls 2s mid-prompt and is correctly NOT flagged.
+      # None of this asks anything of the model, so a reply that ignores an instruction can never be
+      # mistaken for a truncated prompt.
+      $promptBytes     = (New-Object System.Text.UTF8Encoding($false)).GetBytes($p)
+      $delivered       = 0
+      $drained         = $false
+      $exitedBeforeEof = $true
+      $deliveryError   = ''
+      $stdout          = ''
+      $exitCode        = $null
+      $proc            = $null
+      try {
+        # .NET builds the redirected-stdin StreamWriter from the console's input code page and flushes
+        # its PREAMBLE into the pipe at Process.Start, before a single prompt byte. Measured: in a host
+        # whose console is UTF-8 the child received 'ef bb bf' ahead of the prompt; inside Start-Job
+        # the code page is ibm850, whose preamble is empty, so nothing is prepended. That is a
+        # host-dependent corruption of the first bytes of the persona, so it is checked rather than
+        # assumed - and refused, not silently tolerated, exactly like every other not-ready condition.
+        $preamble = 0
+        try { $preamble = [Console]::InputEncoding.GetPreamble().Length } catch { $preamble = 0 }
+        if ($preamble -ne 0) { throw 'the console input encoding would prepend a byte order mark ahead of the prompt' }
+
+        # CreateProcess only ever appends '.exe', so a bare 'claude' would not resolve the .cmd shim an
+        # npm-style install leaves on PATH. Resolve it once, here, and let a missing CLI throw into the
+        # catch below (which the parent turns into $null) rather than fail some other way later.
+        $exe = @(Get-Command claude -CommandType Application -ErrorAction Stop)[0].Source
+
+        # THE LOCKDOWN, as an argument vector. -p carries NO positional value: putting one back would
+        # make claude read that copy and ignore stdin, restoring the silent-truncation bug with every
+        # structural check still green.
+        $claudeArgs = @(
+          '-p'
+          '--allowedTools', $allow
+          '--disallowedTools', $deny
+          '--add-dir', $dir
+          '--strict-mcp-config'
+          '--mcp-config', $cfgPath
+          '--model', 'sonnet'
+          '--input-format', 'text'
+          '--output-format', 'text'
+        )
+        # ProcessStartInfo.Arguments is ONE string, so each token is quoted to survive spaces (the
+        # tool lists and both paths contain them). A Windows path cannot contain a double quote and
+        # neither tool list does, so quoting is lossless - but that is asserted, not assumed, because
+        # an unbalanced quote here is the same argv-shredding class the prompt was just rescued from.
+        foreach ($tokenToQuote in $claudeArgs) {
+          if ([string]$tokenToQuote -match '"') { throw 'an argument contains a double quote' }
+        }
+        $psi = New-Object System.Diagnostics.ProcessStartInfo
+        $psi.FileName  = $exe
+        $psi.Arguments = (($claudeArgs | ForEach-Object { '"' + $_ + '"' }) -join ' ')
+        $psi.RedirectStandardInput  = $true
+        $psi.RedirectStandardOutput = $true
+        # stderr is redirected so it can be DRAINED (an undrained child blocks once it fills the pipe),
+        # never so it can be read: CLI error text carries file paths, stack traces and auth-error
+        # fragments, and merging it into stdout is how that text used to reach Alex looking like Jarvis
+        # talking. $errTask's result is deliberately never inspected.
+        $psi.RedirectStandardError  = $true
+        # Decoding the reply is pinned to UTF-8 rather than left to the job host's console code page
+        # (ibm850 there), which would mangle every non-ASCII character on the way BACK - em dashes in
+        # Jarvis's own prose, accented company names - and those go straight into the chat log and
+        # return as history on the next turn.
+        $psi.StandardOutputEncoding = New-Object System.Text.UTF8Encoding($false)
+        $psi.StandardErrorEncoding  = New-Object System.Text.UTF8Encoding($false)
+        $psi.UseShellExecute = $false
+        $psi.CreateNoWindow  = $true
+        $proc = [System.Diagnostics.Process]::Start($psi)
+        # Both reads start BEFORE the write, asynchronously: a child that fills either output pipe
+        # while we are still writing its input would otherwise deadlock against us.
+        $outTask = $proc.StandardOutput.ReadToEndAsync()
+        $errTask = $proc.StandardError.ReadToEndAsync()
+        # Write to the BaseStream, never through $proc.StandardInput: that StreamWriter carries the
+        # console encoding's preamble and flushing it would append a BOM AFTER the prompt.
+        $stdin = $proc.StandardInput.BaseStream
+        while ($delivered -lt $promptBytes.Length) {
+          $n = [Math]::Min(4096, $promptBytes.Length - $delivered)
+          $stdin.Write($promptBytes, $delivered, $n)
+          $stdin.Flush()
+          $delivered += $n
+        }
+        # The drain check. Wrapping the SAME handle (ownsHandle $false, so this wrapper never closes
+        # it) in a PipeStream is what makes WaitForPipeDrain reachable without P/Invoke.
+        $sph  = New-Object Microsoft.Win32.SafeHandles.SafePipeHandle($stdin.SafeFileHandle.DangerousGetHandle(), $false)
+        $wrap = New-Object System.IO.Pipes.AnonymousPipeClientStream([System.IO.Pipes.PipeDirection]::Out, $sph)
+        $wrap.WaitForPipeDrain()
+        $drained = $true
+        # Sampled BEFORE the close below, which is the only thing that makes it meaningful: EOF has
+        # not been sent yet, so a child that has already exited cannot have read to the end of the
+        # prompt. This is the observation the other two cannot make.
+        $exitedBeforeEof = $proc.HasExited
+        $stdin.Close()          # EOF, only now that the whole prompt is known to have been read
+        $proc.WaitForExit()     # bounded from outside by Wait-Job plus the tree kill below
+        $stdout   = $outTask.Result
+        $exitCode = $proc.ExitCode
+      } catch {
+        # Never rethrow: the parent reads the failure off the object below and returns $null. A child
+        # left running after a failed write would keep holding the OAuth token it inherited.
+        $deliveryError = [string]$_.Exception.Message
+        try { if ($proc -and -not $proc.HasExited) { $proc.Kill() } } catch { }
+      } finally {
+        try { if ($proc) { $proc.Dispose() } } catch { }
+      }
+      [pscustomobject]@{
+        Output = $stdout; ExitCode = $exitCode; PromptBytes = $promptBytes.Length
+        Delivered = $delivered; Drained = $drained; ExitedBeforeEof = $exitedBeforeEof
+        DeliveryError = $deliveryError
+      }
     } -ArgumentList $Prompt, $script:JarvisChatAllowedTools, $script:JarvisChatDisallowedTools, $ScopeDir, $tok, $cfgPath, $pidFile
 
     $done = Wait-Job $job -Timeout $TimeoutSec
@@ -553,6 +675,15 @@ function Invoke-ChatTurn {
     # genuinely complete, or a claude run that exited non-zero, is a failure, full stop.
     if ($jobState -ne 'Completed') { return $null }
     if (-not $result) { return $null }
+    # THE DELIVERY GATE. An exit code of 0 says the child was happy; it says nothing about whether the
+    # child ever read the question. These four checks are what make a short read fail CLOSED instead
+    # of returning a confident answer to a prompt that was never fully delivered. Deleting any one of
+    # them restores the defect described at length in the job above, so tests/telegram-chat.Tests.ps1
+    # pins all four and exercises them with a stand-in child that reads 100 bytes and exits 0.
+    if ($result.DeliveryError) { return $null }
+    if (-not $result.Drained) { return $null }
+    if ($result.ExitedBeforeEof) { return $null }
+    if ($result.PromptBytes -le 0 -or $result.Delivered -ne $result.PromptBytes) { return $null }
     if ($result.ExitCode -ne 0) { return $null }
     $out = $result.Output
     if (-not $out -or -not $out.Trim()) { return $null }
