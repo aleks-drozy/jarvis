@@ -264,35 +264,113 @@ $script:JarvisChatAllowedTools    = 'Read Glob Grep'
 $script:JarvisChatDisallowedTools = 'Bash Write Edit WebFetch WebSearch'
 
 function Invoke-ChatTurn {
-  # One headless turn. Returns the reply text, or $null if it timed out or failed (the caller turns
-  # that into a butler-voiced apology - never a silent miss).
+  # One headless turn. Returns the reply text, or $null if it timed out, failed, or the environment
+  # was not ready (missing/corrupt token, missing scope dir) - the caller turns $null into a
+  # butler-voiced apology. Never a silent miss, and never the raw CLI output (which can carry file
+  # paths, stack traces or auth-error fragments) forwarded to Alex as though it were Jarvis talking.
   # Run inside a job so a hung model call cannot wedge the poller past its window.
-  param([string]$Prompt, [string]$ScopeDir, [int]$TimeoutSec = 180)
+  param(
+    [string]$Prompt,
+    [Parameter(Mandatory)][ValidateNotNullOrEmpty()][string]$ScopeDir,
+    [int]$TimeoutSec = 180
+  )
 
-  # Headless auth: same long-lived subscription token the 08:30 wrapper uses.
+  # The read scope is a security decision Alex made (one directory, not "whatever the poller's
+  # current directory happens to be"). Validate it here and degrade to $null rather than let
+  # Set-Location fail loudly (or, worse, silently no-op) inside the job below.
+  if (-not (Test-Path -LiteralPath $ScopeDir)) { return $null }
+
+  # Headless auth: same long-lived subscription token the 08:30 wrapper uses. A corrupt token file
+  # (truncated XML, or content that does not deserialize to a SecureString) is the same class of
+  # operating condition as "file absent" - degrade to $null for either, never throw.
   $tokFile = Join-Path $HOME '.jarvis\claude-token.xml'
   if (-not (Test-Path $tokFile)) { return $null }
-  $sec = Import-Clixml $tokFile
-  $env:CLAUDE_CODE_OAUTH_TOKEN = (New-Object System.Management.Automation.PSCredential('t', $sec)).GetNetworkCredential().Password
+  try {
+    $sec = Import-Clixml $tokFile
+    $tok = (New-Object System.Management.Automation.PSCredential('t', $sec)).GetNetworkCredential().Password
+  } catch {
+    return $null
+  }
+  # Local variable only - never $env: in THIS process. jarvis-debrief.ps1 sets $env: for the same
+  # token, but that script is one-shot; this file is dot-sourced into a poller that runs all day, so
+  # every child it ever spawns for the rest of the day would inherit the token from a process-wide
+  # $env: assignment here. The job below receives the token through -ArgumentList instead.
 
-  $job = Start-Job -ScriptBlock {
-    param($p, $allow, $deny, $dir, $tok)
-    $env:CLAUDE_CODE_OAUTH_TOKEN = $tok
-    & claude -p $p `
-      --allowedTools $allow `
-      --disallowedTools $deny `
-      --add-dir $dir `
-      --strict-mcp-config --mcp-config '{"mcpServers":{}}' `
-      --model sonnet `
-      --output-format text 2>&1
-  } -ArgumentList $Prompt, $script:JarvisChatAllowedTools, $script:JarvisChatDisallowedTools, $ScopeDir, $env:CLAUDE_CODE_OAUTH_TOKEN
+  # PS 5.1 strips embedded double quotes when it builds a native command line, so the inline JSON
+  # literal '{"mcpServers":{}}' used to arrive at claude as the invalid '{mcpServers:{}}' - silently
+  # defeating the one flag that guarantees no MCP server (and therefore no outbound channel) is
+  # available to the model. Measured with a throwaway argv-echo script: the native call operator
+  # preserves a whole variable (spaces, newlines, quotes-minus-the-quote-characters) as ONE argv
+  # entry, but any embedded " inside that single argument is dropped. A bare file path has no "
+  # characters for PS 5.1 to mangle, so write the config to a temp file and pass its path instead.
+  $cfgPath = Join-Path $env:TEMP ('jarvis-mcp-' + [guid]::NewGuid().ToString('N') + '.json')
+  Set-Content -Encoding ASCII -LiteralPath $cfgPath -Value '{"mcpServers":{}}'
+  # Same idea for the job-host PID: written to a temp file by the job itself so a timeout can kill
+  # the real OS process tree (see below), not just guess at it from the outside.
+  $pidFile = Join-Path $env:TEMP ('jarvis-chat-pid-' + [guid]::NewGuid().ToString('N') + '.txt')
 
-  $done = Wait-Job $job -Timeout $TimeoutSec
-  if (-not $done) { Stop-Job $job -ErrorAction SilentlyContinue; Remove-Job $job -Force -ErrorAction SilentlyContinue; return $null }
-  $out = (Receive-Job $job -ErrorAction SilentlyContinue | Out-String)
-  Remove-Job $job -Force -ErrorAction SilentlyContinue
-  if (-not $out -or -not $out.Trim()) { return $null }
-  return $out.Trim()
+  try {
+    $job = Start-Job -ScriptBlock {
+      param($p, $allow, $deny, $dir, $tok, $cfgPath, $pidFile)
+      # FIRST statement: pin the working directory to the one scope Alex chose. Start-Job in PS 5.1
+      # has no -WorkingDirectory and does not inherit the caller's location - measured: with the
+      # parent at C:\Windows, an unpinned job landed in C:\Users\<user>\Documents. claude treats its
+      # working directory as the project root and --add-dir only ADDS to that, so an unpinned job
+      # would let the agent read the poller's ambient location (the whole Documents tree) plus the
+      # intended directory - not the one directory Alex decided the phone could reach.
+      Set-Location -LiteralPath $dir
+      # The job host's own PID (not claude's - claude.exe is spawned as ITS child below, and itself
+      # spawns further child claude.exe helper processes, observed directly on this machine). Written
+      # before the long-running call so it is available the instant a timeout needs to kill the tree.
+      Set-Content -LiteralPath $pidFile -Value $PID
+      $env:CLAUDE_CODE_OAUTH_TOKEN = $tok
+      # No 2>&1: merging stderr into the output stream is exactly how a failed run's error text (file
+      # paths, stack traces, auth-error fragments) used to end up quoted back to Alex as a normal
+      # reply. Discard stderr and judge success from the exit code instead.
+      $stdout = & claude -p $p `
+        --allowedTools $allow `
+        --disallowedTools $deny `
+        --add-dir $dir `
+        --strict-mcp-config --mcp-config $cfgPath `
+        --model sonnet `
+        --output-format text 2>$null
+      [pscustomobject]@{ Output = ($stdout | Out-String); ExitCode = $LASTEXITCODE }
+    } -ArgumentList $Prompt, $script:JarvisChatAllowedTools, $script:JarvisChatDisallowedTools, $ScopeDir, $tok, $cfgPath, $pidFile
+
+    $done = Wait-Job $job -Timeout $TimeoutSec
+    if (-not $done) {
+      # Stop-Job only terminates the job's own PowerShell host. claude.exe (and its own child
+      # claude.exe helper processes - several were observed per run on this machine) is a DESCENDANT
+      # of that host, not the host itself, and survives Stop-Job as an orphan that keeps holding the
+      # OAuth token in its inherited environment. Kill the whole tree by PID instead; /T recursively
+      # terminates descendants, confirmed empirically (see task report).
+      if (Test-Path -LiteralPath $pidFile) {
+        $hostPidText = (Get-Content -LiteralPath $pidFile -Raw -ErrorAction SilentlyContinue)
+        if ($hostPidText -match '^\s*(\d+)\s*$') {
+          try { & taskkill /PID $Matches[1] /T /F 2>$null | Out-Null } catch { }
+        }
+      }
+      Stop-Job $job -ErrorAction SilentlyContinue
+      Remove-Job $job -Force -ErrorAction SilentlyContinue
+      return $null
+    }
+
+    $result   = Receive-Job $job -ErrorAction SilentlyContinue
+    $jobState = $job.State
+    Remove-Job $job -Force -ErrorAction SilentlyContinue
+
+    # The contract is $null on failure, always - never the job's raw error output. A job that did not
+    # genuinely complete, or a claude run that exited non-zero, is a failure, full stop.
+    if ($jobState -ne 'Completed') { return $null }
+    if (-not $result) { return $null }
+    if ($result.ExitCode -ne 0) { return $null }
+    $out = $result.Output
+    if (-not $out -or -not $out.Trim()) { return $null }
+    return $out.Trim()
+  } finally {
+    Remove-Item -LiteralPath $cfgPath -Force -ErrorAction SilentlyContinue
+    Remove-Item -LiteralPath $pidFile -Force -ErrorAction SilentlyContinue
+  }
 }
 
 if ($DotSourceOnly) { return }
