@@ -291,7 +291,12 @@ function Invoke-TelegramCommand {
                      -CollectorText $collector -History (Get-ChatHistory -Turns 6) -Nonce $nonce
       $reply     = Invoke-ChatTurn -Prompt $prompt -ScopeDir $VAULT -TimeoutSec 180
       if (-not $reply) {
-        $reply = 'That one got away from me, Sir - the run timed out. Try again, or ask me at the desk.'
+        # Invoke-ChatTurn returns $null for MANY causes - a missing/corrupt token, a non-zero claude
+        # exit, empty output, a refused scope, a failed setup write - and only SOMETIMES a timeout.
+        # This line used to name the timeout regardless, so every other failure reached Alex as a
+        # confident, specific, and false account of what happened. Jarvis does not state what it does
+        # not know: say plainly that nothing came back and that the reason is not known here.
+        $reply = 'Nothing came back from that one, Sir - and I cannot tell you why. Try again, or ask me at the desk.'
       }
       # Fix 4: SEND before logging. The reply already cost an up-to-180s model run; logging used to run
       # first, so a disk-full, a file lock from a concurrent manual run, or an unset $HOME throwing here

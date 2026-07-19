@@ -221,7 +221,7 @@ $script:MockChatTurnReturn = $null
 Invoke-TelegramCommand -Command 'chat' -Text 'Tell me a joke, Sir' -Cred $mockCred
 Assert ($script:MockSentMessages.Count -eq 1) "null Invoke-ChatTurn: exactly one Send-Telegram call, got $($script:MockSentMessages.Count)"
 Assert ($null -ne $script:MockSentMessages[0].Text -and $script:MockSentMessages[0].Text -ne '') "null Invoke-ChatTurn: sent text is never raw `$null or empty"
-Assert ($script:MockSentMessages[0].Text -eq 'That one got away from me, Sir - the run timed out. Try again, or ask me at the desk.') "null Invoke-ChatTurn: substituted with the butler-voiced apology, got '$($script:MockSentMessages[0].Text)'"
+Assert ($script:MockSentMessages[0].Text -eq 'Nothing came back from that one, Sir - and I cannot tell you why. Try again, or ask me at the desk.') "null Invoke-ChatTurn: substituted with the butler-voiced apology, got '$($script:MockSentMessages[0].Text)'"
 $loggedNull = Get-Content -LiteralPath $script:MockChatLogPath -Raw
 Assert ($loggedNull -match [regex]::Escape($script:MockSentMessages[0].Text)) "null case: the logged reply matches what was sent"
 Remove-Item -LiteralPath $script:MockChatLogPath -Force -ErrorAction SilentlyContinue
@@ -231,7 +231,7 @@ $script:MockChatTurnReturn = ''
 Invoke-TelegramCommand -Command 'chat' -Text 'Tell me a joke, Sir' -Cred $mockCred
 Assert ($script:MockSentMessages.Count -eq 1) "empty-string Invoke-ChatTurn: exactly one Send-Telegram call, got $($script:MockSentMessages.Count)"
 Assert ($null -ne $script:MockSentMessages[0].Text -and $script:MockSentMessages[0].Text -ne '') "empty-string Invoke-ChatTurn: sent text is never raw `$null or empty"
-Assert ($script:MockSentMessages[0].Text -eq 'That one got away from me, Sir - the run timed out. Try again, or ask me at the desk.') "empty-string Invoke-ChatTurn: substituted with the butler-voiced apology, got '$($script:MockSentMessages[0].Text)'"
+Assert ($script:MockSentMessages[0].Text -eq 'Nothing came back from that one, Sir - and I cannot tell you why. Try again, or ask me at the desk.') "empty-string Invoke-ChatTurn: substituted with the butler-voiced apology, got '$($script:MockSentMessages[0].Text)'"
 $loggedEmpty = Get-Content -LiteralPath $script:MockChatLogPath -Raw
 Assert ($loggedEmpty -match [regex]::Escape($script:MockSentMessages[0].Text)) "empty case: the logged reply matches what was sent"
 Remove-Item -LiteralPath $script:MockChatLogPath -Force -ErrorAction SilentlyContinue
