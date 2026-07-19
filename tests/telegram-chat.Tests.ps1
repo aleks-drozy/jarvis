@@ -281,8 +281,25 @@ foreach ($denied in @('Bash','Write','Edit','WebFetch','WebSearch')) {
 $chatSrc = Get-Content "$PSScriptRoot\..\skill\bin\telegram-chat.ps1" -Raw
 $allowOccurrences = [regex]::Matches($chatSrc, '--allowedTools').Count
 Assert ($allowOccurrences -eq 1) "exactly one --allowedTools in telegram-chat.ps1, found $allowOccurrences"
-Assert ($chatSrc -match '--strict-mcp-config') "MCP servers must be disabled: connected servers would restore an outbound channel"
+
+# --strict-mcp-config must be present ON THE INVOCATION ITSELF, not merely anywhere in the file - a
+# bare substring match would also pass if the flag only showed up in a comment or an unrelated
+# string. Isolate the actual claude invocation block (from the call operator through the discarded
+# stderr redirect that ends it) and require the flag inside THAT block.
+$invocationBlock = [regex]::Match($chatSrc, '&\s*claude\s+(?:-p|--print)\b[\s\S]*?2>\$null')
+Assert ($invocationBlock.Success) "could not locate the claude invocation block in telegram-chat.ps1"
+Assert ($invocationBlock.Value -match '--strict-mcp-config') "MCP servers must be disabled ON THE INVOCATION ITSELF: connected servers would restore an outbound channel"
 Assert ($chatSrc -match '--add-dir') "the read scope must be pinned with --add-dir"
+
+# --- Critical 2 fix: the MCP config literal moved out of the invocation line into a separate
+# --- Set-Content -Value string (to dodge a PS 5.1 native-argument quoting bug), and no assertion
+# --- anywhere in this suite ever mentioned 'mcpServers' - so widening that one string to
+# --- '{"mcpServers":{"x":{"command":"..."}}}' silently restores an MCP server (and the outbound
+# --- channel that comes with it) while every check above stays green. Assert the payload actually
+# --- written to disk is exactly the empty-server-map literal.
+$mcpValue = [regex]::Match($chatSrc, "Set-Content[^\r\n]*-Value\s+'(\{[^\r\n']*\})'")
+Assert ($mcpValue.Success) "could not locate the Set-Content line writing the MCP config payload"
+Assert ($mcpValue.Groups[1].Value -eq '{"mcpServers":{}}') "the MCP config payload written to disk must be exactly {`"mcpServers`":{}}, got '$($mcpValue.Groups[1].Value)'"
 
 # --- Important 7 fix: the checks above only ever inspected the CONSTANTS ($JarvisChatAllowedTools /
 # --- $JarvisChatDisallowedTools) and a bare substring count. Five concrete edits widen the effective
@@ -310,6 +327,21 @@ Assert ($chatSrc -notmatch '\+\s*\$script:JarvisChatAllowedTools') "the allowedT
 Assert ($chatSrc -notmatch '\(\s*\$script:JarvisChatAllowedTools') "the allowedTools constant must not be wrapped in an expression when passed to the job"
 Assert ($chatSrc -notmatch '\$script:JarvisChatDisallowedTools\s*\+') "the disallowedTools constant must not be concatenated when passed to the job"
 Assert ($chatSrc -notmatch '\+\s*\$script:JarvisChatDisallowedTools') "the disallowedTools constant must not be concatenated when passed to the job"
+# --- Important 4 fix: the wrapping-paren check above existed only for the ALLOW constant. Without
+# --- its mirror, '--disallowedTools ($script:JarvisChatDisallowedTools -replace ''Bash'','''')'
+# --- strips Bash from the deny list with no '+' anywhere, and passed every check above.
+Assert ($chatSrc -notmatch '\(\s*\$script:JarvisChatDisallowedTools') "the disallowedTools constant must not be wrapped in an expression when passed to the job - mirrors the existing allowedTools wrapping-paren check"
+
+# --- Important 3 fix: every assertion above binds to the CONSTANTS' names or the flag's syntax, not
+# --- to what happens to them once inside the job scriptblock. A single added line there -
+# --- '$allow = $allow + '' Bash''', or plainly '$allow = ''Read Glob Grep Bash''' - widens the
+# --- effective tool set while the constant still reads 'Read Glob Grep', the invocation still reads
+# --- '--allowedTools $allow', and no $script:Jarvis* token is ever concatenated. Equivalently,
+# --- swapping the second and third -ArgumentList entries binds the deny list into $allow. Assert the
+# --- scriptblock never assigns to allow/deny, and assert the param()/-ArgumentList shapes directly.
+Assert ($chatSrc -notmatch '\$(allow|deny)\s*(=|\+=)') "the job scriptblock must never assign to the allow or deny parameter - a rebind there would widen the effective tool set while every other check in this guard stays green"
+Assert ($chatSrc -match 'param\(\s*\$p\s*,\s*\$allow\s*,\s*\$deny\s*,\s*\$dir\s*,\s*\$tok\s*,\s*\$cfgPath\s*,\s*\$pidFile\s*\)') "the job scriptblock's param() must bind p, allow, deny, dir, tok, cfgPath, pidFile in that exact order"
+Assert ($chatSrc -match '-ArgumentList\s+\$Prompt,\s*\$script:JarvisChatAllowedTools,\s*\$script:JarvisChatDisallowedTools,\s*\$ScopeDir,\s*\$tok,\s*\$cfgPath,\s*\$pidFile') "-ArgumentList must bind Prompt, AllowedTools, DisallowedTools, ScopeDir, tok, cfgPath, pidFile in that exact order - swapping allow and deny here would bind the deny list into allow with no assignment and no concatenation anywhere"
 
 # flags that make the allowlist moot entirely must never appear, in any documented spelling (catches 3)
 foreach ($bad in @('--dangerously-skip-permissions', '--allow-dangerously-skip-permissions', '--permission-mode')) {
@@ -326,10 +358,15 @@ Assert ($disallowOccurrences -eq 1) "exactly one --disallowedTools in telegram-c
 Assert ($chatSrc -notmatch '--allowed-tools\b') "the kebab-case alias --allowed-tools must not be used either"
 Assert ($chatSrc -notmatch '--disallowed-tools\b') "the kebab-case alias --disallowed-tools must not be used either"
 
-# exactly one invocation of claude -p in the whole file - counting '--allowedTools' occurrences (the
-# original check, kept above) says nothing about a SECOND invocation elsewhere that has no
-# --allowedTools at all (catches 5)
-$claudeInvocations = [regex]::Matches($chatSrc, 'claude\s+-p\b').Count
-Assert ($claudeInvocations -eq 1) "exactly one 'claude -p' invocation in telegram-chat.ps1, found $claudeInvocations"
+# exactly one invocation of claude -p (or its --print alias - claude --help documents -p/--print as
+# aliases on the installed 2.1.116 CLI, so a second invocation spelled 'claude --print ... --model
+# sonnet --output-format text' with no --allowedTools would evade a regex that only matches '-p')
+# in the whole file - counting '--allowedTools' occurrences (the original check, kept above) says
+# nothing about a SECOND invocation elsewhere that has no --allowedTools at all (catches 5). Strip
+# comment lines first so a future comment merely mentioning the literal 'claude -p' cannot fail this
+# assertion with a misleading count.
+$chatSrcNoComments = (($chatSrc -split '\r?\n') | Where-Object { $_ -notmatch '^\s*#' }) -join "`n"
+$claudeInvocations = [regex]::Matches($chatSrcNoComments, 'claude\s+(-p|--print)\b').Count
+Assert ($claudeInvocations -eq 1) "exactly one 'claude -p'/'--print' invocation in telegram-chat.ps1, found $claudeInvocations"
 
 Write-Host "telegram-chat: ALL PASS"

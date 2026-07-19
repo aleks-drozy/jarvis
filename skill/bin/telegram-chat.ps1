@@ -271,14 +271,27 @@ function Invoke-ChatTurn {
   # Run inside a job so a hung model call cannot wedge the poller past its window.
   param(
     [string]$Prompt,
-    [Parameter(Mandatory)][ValidateNotNullOrEmpty()][string]$ScopeDir,
+    [string]$ScopeDir,
     [int]$TimeoutSec = 180
   )
 
+  # -ScopeDir is deliberately NOT Mandatory/ValidateNotNullOrEmpty: this function's own contract
+  # (above) promises $null, never a throw, when the environment is not ready. In the non-interactive
+  # poller host, a Mandatory parameter that is omitted or blank raises a ParameterBindingException
+  # (and an omitted argument raises one too, rather than prompting) which would propagate straight
+  # into the poller loop - the exact failure mode this function exists to prevent. Degrade instead.
+  if ([string]::IsNullOrWhiteSpace($ScopeDir)) { return $null }
+
   # The read scope is a security decision Alex made (one directory, not "whatever the poller's
-  # current directory happens to be"). Validate it here and degrade to $null rather than let
-  # Set-Location fail loudly (or, worse, silently no-op) inside the job below.
-  if (-not (Test-Path -LiteralPath $ScopeDir)) { return $null }
+  # current directory happens to be"). -PathType Container rejects a FILE path here: a bare
+  # Test-Path (no -PathType) lets a file pass this check, and Set-Location on a file then fails
+  # non-terminating inside the job below, falling through to run with whatever directory the job
+  # host happened to start in - the exact fail-open this validation exists to close. Resolve to an
+  # absolute path before handing it to the job, too: the job resolves a RELATIVE path against the
+  # job's own working directory (~\Documents), not the caller's, so an unresolved relative $ScopeDir
+  # can silently pin the agent to the wrong directory with no error at all.
+  if (-not (Test-Path -LiteralPath $ScopeDir -PathType Container)) { return $null }
+  $ScopeDir = (Resolve-Path -LiteralPath $ScopeDir).ProviderPath
 
   # Headless auth: same long-lived subscription token the 08:30 wrapper uses. A corrupt token file
   # (truncated XML, or content that does not deserialize to a SecureString) is the same class of
@@ -296,20 +309,28 @@ function Invoke-ChatTurn {
   # every child it ever spawns for the rest of the day would inherit the token from a process-wide
   # $env: assignment here. The job below receives the token through -ArgumentList instead.
 
-  # PS 5.1 strips embedded double quotes when it builds a native command line, so the inline JSON
-  # literal '{"mcpServers":{}}' used to arrive at claude as the invalid '{mcpServers:{}}' - silently
-  # defeating the one flag that guarantees no MCP server (and therefore no outbound channel) is
-  # available to the model. Measured with a throwaway argv-echo script: the native call operator
-  # preserves a whole variable (spaces, newlines, quotes-minus-the-quote-characters) as ONE argv
-  # entry, but any embedded " inside that single argument is dropped. A bare file path has no "
-  # characters for PS 5.1 to mangle, so write the config to a temp file and pass its path instead.
-  $cfgPath = Join-Path $env:TEMP ('jarvis-mcp-' + [guid]::NewGuid().ToString('N') + '.json')
-  Set-Content -Encoding ASCII -LiteralPath $cfgPath -Value '{"mcpServers":{}}'
-  # Same idea for the job-host PID: written to a temp file by the job itself so a timeout can kill
-  # the real OS process tree (see below), not just guess at it from the outside.
-  $pidFile = Join-Path $env:TEMP ('jarvis-chat-pid-' + [guid]::NewGuid().ToString('N') + '.txt')
-
+  $cfgPath = $null
+  $pidFile = $null
   try {
+    # PS 5.1 strips embedded double quotes when it builds a native command line, so the inline JSON
+    # literal '{"mcpServers":{}}' used to arrive at claude as the invalid '{mcpServers:{}}' - silently
+    # defeating the one flag that guarantees no MCP server (and therefore no outbound channel) is
+    # available to the model. Measured with a throwaway argv-echo script: the native call operator
+    # preserves a whole variable (spaces, newlines, quotes-minus-the-quote-characters) as ONE argv
+    # entry, but any embedded " inside that single argument is dropped. A bare file path has no "
+    # characters for PS 5.1 to mangle, so write the config to a file and pass its path instead.
+    # Written under .jarvis, not $env:TEMP: under a Scheduled Task running as SYSTEM, TEMP is
+    # C:\Windows\Temp, writable by other authenticated users on the box, and this file gates the
+    # model's only outbound channel - as security-relevant as the token that already lives in
+    # .jarvis. Both this Join-Path and the Set-Content live inside the try below: a null $env:HOME
+    # or a failed write is the same "environment not ready" condition as a missing token and must
+    # degrade to $null via the catch, not throw into the poller loop.
+    $cfgPath = Join-Path (Join-Path $HOME '.jarvis') ('jarvis-mcp-' + [guid]::NewGuid().ToString('N') + '.json')
+    Set-Content -Encoding ASCII -LiteralPath $cfgPath -Value '{"mcpServers":{}}' -ErrorAction Stop
+    # Same idea for the job-host PID: written to a temp file by the job itself so a timeout can kill
+    # the real OS process tree (see below), not just guess at it from the outside.
+    $pidFile = Join-Path $env:TEMP ('jarvis-chat-pid-' + [guid]::NewGuid().ToString('N') + '.txt')
+
     $job = Start-Job -ScriptBlock {
       param($p, $allow, $deny, $dir, $tok, $cfgPath, $pidFile)
       # FIRST statement: pin the working directory to the one scope Alex chose. Start-Job in PS 5.1
@@ -318,7 +339,12 @@ function Invoke-ChatTurn {
       # working directory as the project root and --add-dir only ADDS to that, so an unpinned job
       # would let the agent read the poller's ambient location (the whole Documents tree) plus the
       # intended directory - not the one directory Alex decided the phone could reach.
-      Set-Location -LiteralPath $dir
+      # -ErrorAction Stop: without it, a failure here (dir removed/renamed between the parent's
+      # Test-Path check and this line) is NON-TERMINATING - execution falls through to the claude
+      # call below with whatever directory the job host happened to start in, silently defeating
+      # this whole guard. Stop makes the job itself fail; the caller already turns a failed job into
+      # $null via the $job.State check after Receive-Job.
+      Set-Location -LiteralPath $dir -ErrorAction Stop
       # The job host's own PID (not claude's - claude.exe is spawned as ITS child below, and itself
       # spawns further child claude.exe helper processes, observed directly on this machine). Written
       # before the long-running call so it is available the instant a timeout needs to kill the tree.
@@ -367,9 +393,14 @@ function Invoke-ChatTurn {
     $out = $result.Output
     if (-not $out -or -not $out.Trim()) { return $null }
     return $out.Trim()
+  } catch {
+    # A null $env:TEMP/$HOME, a failed write to disk, or any other unexpected failure while setting
+    # up the turn is the same class of "environment not ready" condition as a missing token -
+    # degrade to $null per this function's contract rather than letting it throw into the poller loop.
+    return $null
   } finally {
-    Remove-Item -LiteralPath $cfgPath -Force -ErrorAction SilentlyContinue
-    Remove-Item -LiteralPath $pidFile -Force -ErrorAction SilentlyContinue
+    if ($cfgPath) { Remove-Item -LiteralPath $cfgPath -Force -ErrorAction SilentlyContinue }
+    if ($pidFile) { Remove-Item -LiteralPath $pidFile -Force -ErrorAction SilentlyContinue }
   }
 }
 
