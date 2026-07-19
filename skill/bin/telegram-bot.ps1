@@ -31,7 +31,7 @@ param(
 $ErrorActionPreference = 'Stop'
 $BIN = $PSScriptRoot
 . "$PSScriptRoot\get-jarvis-config.ps1"
-. "$PSScriptRoot\telegram-chat.ps1" -DotSourceOnly
+. "$PSScriptRoot\telegram-chat.ps1"
 $VAULT = (Get-JarvisConfig).vault_path
 
 # ---------- pure helpers (unit-tested; no network) ----------
