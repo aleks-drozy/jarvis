@@ -31,6 +31,7 @@ param(
 $ErrorActionPreference = 'Stop'
 $BIN = $PSScriptRoot
 . "$PSScriptRoot\get-jarvis-config.ps1"
+. "$PSScriptRoot\telegram-chat.ps1" -DotSourceOnly
 $VAULT = (Get-JarvisConfig).vault_path
 
 # ---------- pure helpers (unit-tested; no network) ----------
@@ -280,7 +281,25 @@ function Invoke-TelegramCommand {
       $recent = Get-RecentCaptures 10
       Send-Telegram -Text $(if ($recent) { "Recent notes, Sir:`n$recent" } else { 'No notes captured yet, Sir.' }) -Cred $Cred | Out-Null
     }
-    default  { Send-Telegram -Text 'I take: /debrief, /status, "note <text>" to jot something down, and /notes to read them back, Sir. Full conversation is on the desktop (Ctrl+Shift+J).' -Cred $Cred | Out-Null }
+    'chat' {
+      # Read-only remote turn. Pre-fetch runs FIXED collectors here in PowerShell; the agent itself
+      # only ever gets Read/Glob/Grep (see telegram-chat.ps1 for the full contract).
+      $names     = Get-ChatPrefetch -Text $Text
+      $collector = Invoke-ChatPrefetch -Names $names -BinDir $BIN
+      $nonce     = New-ChatNonce
+      $prompt    = Build-ChatPrompt -Message $Text -Persona (Get-ChatPersona) `
+                     -CollectorText $collector -History (Get-ChatHistory -Turns 6) -Nonce $nonce
+      $reply     = Invoke-ChatTurn -Prompt $prompt -ScopeDir $VAULT -TimeoutSec 180
+      if (-not $reply) {
+        $reply = 'That one got away from me, Sir - the run timed out. Try again, or ask me at the desk.'
+      }
+      Write-ChatLog -Message $Text -Reply $reply
+      foreach ($chunk in @(Split-TelegramText $reply 3900)) { Send-Telegram -Text $chunk -Cred $Cred | Out-Null }
+    }
+    default  {
+      $extra = if (Test-ChatEnabled -VaultPath $VAULT) { ' You can also just ask me things in plain English, Sir.' } else { '' }
+      Send-Telegram -Text ('I take: /debrief, /status, "note <text>" to jot something down, and /notes to read them back, Sir.' + $extra + ' Full conversation is on the desktop (Ctrl+Shift+J).') -Cred $Cred | Out-Null
+    }
   }
 }
 
@@ -290,6 +309,7 @@ function Write-Offset { param($Offset) @{ offset = $Offset } | ConvertTo-Json | 
 function Invoke-PollOnce {
   # One long-poll: fetch, act on allowed commands, advance the offset. Returns count handled.
   param($Cred, [int]$TimeoutSec = 30)
+  $chatOn = Test-ChatEnabled -VaultPath $VAULT
   $offset = Read-Offset
   $body = @{ timeout = $TimeoutSec }
   if ($offset) { $body.offset = $offset }
@@ -297,7 +317,7 @@ function Invoke-PollOnce {
   $ups = @(Parse-TelegramUpdates $resp)
   # Collapse repeats + ignore a stale backlog BEFORE doing any work (see Select-ActionableUpdates).
   $act = @{}
-  foreach ($a in @(Select-ActionableUpdates -Updates $ups -Now (Get-Date) -MaxAgeMinutes 10)) { $act[[string]$a.UpdateId] = $true }
+  foreach ($a in @(Select-ActionableUpdates -Updates $ups -Now (Get-Date) -MaxAgeMinutes 10 -ChatEnabled:$chatOn)) { $act[[string]$a.UpdateId] = $true }
   $handled = 0
   foreach ($u in $ups) {
     # CONSUME FIRST (at-most-once). /debrief takes ~3 minutes; if this process is killed mid-command
@@ -306,8 +326,19 @@ function Invoke-PollOnce {
     # Losing one command to a crash is strictly better than delivering it five times.
     Write-Offset ($u.UpdateId + 1)
     if (-not (Test-TelegramSenderAllowed $u.ChatId $Cred.ChatId)) { continue }   # self-only
-    if (-not $act.ContainsKey([string]$u.UpdateId)) { continue }                 # stale or superseded
-    try { Invoke-TelegramCommand -Command (Resolve-TelegramCommand $u.Text) -Text $u.Text -Cred $Cred; $handled++ }
+    $cmd = Resolve-TelegramCommand -Text $u.Text -ChatEnabled:$chatOn
+    if (-not $act.ContainsKey([string]$u.UpdateId)) {
+      # Stale or superseded. A superseded /debrief is silently dropped (that IS the fix). But a stale
+      # QUESTION deserves a word: silence is what made Alex press /debrief four times on 2026-07-16.
+      # Cheap acknowledgement, no model call.
+      if ($cmd -eq 'chat' -and $null -ne $u.Date) {
+        try {
+          Send-Telegram -Text ("That came in at $($u.Date.ToString('HH:mm')), Sir. I have let it lie - ask again if it still matters.") -Cred $Cred | Out-Null
+        } catch { }
+      }
+      continue
+    }
+    try { Invoke-TelegramCommand -Command $cmd -Text $u.Text -Cred $Cred; $handled++ }
     catch { Write-Warning "command failed (dropped, not retried): $($_.Exception.Message)" }
   }
   return $handled

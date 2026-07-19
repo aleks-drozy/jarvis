@@ -8,7 +8,14 @@
 # builds a command line and never passes message text as an argument. Changing the allowlist breaks
 # the whole argument - tests/telegram-chat.Tests.ps1 fails the build if you do.
 # ASCII only (PS 5.1 reads .ps1 as ANSI).
-param([switch]$DotSourceOnly)
+#
+# DELIBERATELY NO param BLOCK: dot-sourcing runs in the CALLER's scope, so a param here (e.g. the
+# house -DotSourceOnly convention) would CLOBBER the caller's variable of the same name - the same
+# trap get-jarvis-config.ps1 documents, and reproduced live here 2026-07-19 the moment this file was
+# dot-sourced from telegram-bot.ps1: -Once exited silently (exit 0, no "Handled N update(s)." line)
+# because the param block bound telegram-bot.ps1's OWN $DotSourceOnly to true. Callers may still pass
+# -DotSourceOnly positionally (kept for call-site consistency); with no param block to bind it, it has
+# no effect on the caller's scope.
 $ErrorActionPreference = 'Stop'
 
 function Test-ChatEnabled {
@@ -416,4 +423,5 @@ function Invoke-ChatTurn {
   }
 }
 
-if ($DotSourceOnly) { return }
+# nothing to do when run directly (powershell -File ...); when dot-sourced, InvocationName is '.'
+if ($MyInvocation.InvocationName -ne '.') { }
