@@ -16,6 +16,18 @@ Assert ((Resolve-TelegramCommand 'delete all my files') -eq 'help') "arbitrary t
 Assert ((Resolve-TelegramCommand '') -eq 'help') "empty -> help"
 Assert ((Resolve-TelegramCommand $null) -eq 'help') "null -> help"
 
+# --- -ChatEnabled adds exactly one outcome and changes nothing else (the whitelist stays the default) ---
+Assert ((Resolve-TelegramCommand 'how am I doing on the job hunt') -eq 'help') "chat OFF: arbitrary text -> help"
+Assert ((Resolve-TelegramCommand 'how am I doing on the job hunt' -ChatEnabled) -eq 'chat') "chat ON: arbitrary text -> chat"
+Assert ((Resolve-TelegramCommand '   ' -ChatEnabled) -eq 'help') "chat ON: whitespace-only -> help, never chat"
+Assert ((Resolve-TelegramCommand '' -ChatEnabled) -eq 'help') "chat ON: empty -> help"
+Assert ((Resolve-TelegramCommand $null -ChatEnabled) -eq 'help') "chat ON: null -> help"
+# the four real commands must be unreachable by chat - they win in BOTH modes
+Assert ((Resolve-TelegramCommand '/debrief' -ChatEnabled) -eq 'debrief') "chat ON: /debrief still debrief"
+Assert ((Resolve-TelegramCommand 'ping' -ChatEnabled) -eq 'status') "chat ON: ping still status"
+Assert ((Resolve-TelegramCommand 'note buy protein' -ChatEnabled) -eq 'note') "chat ON: note still note"
+Assert ((Resolve-TelegramCommand '/notes' -ChatEnabled) -eq 'notes') "chat ON: /notes still notes"
+
 # --- Test-TelegramSenderAllowed: the self-only gate (numeric/string ids must compare equal) ---
 Assert (Test-TelegramSenderAllowed 555 555) "same id allowed"
 Assert (Test-TelegramSenderAllowed '555' 555) "string vs numeric id allowed"
