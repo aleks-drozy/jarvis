@@ -1,7 +1,7 @@
 # tests/telegram-chat.Tests.ps1 - read-only Telegram chat. Pure logic only, NO network and NO model
 # calls. The structural no-execution guard at the bottom is the security-critical one.
 $ErrorActionPreference = 'Stop'
-. "$PSScriptRoot\..\skill\bin\telegram-chat.ps1" -DotSourceOnly
+. "$PSScriptRoot\..\skill\bin\telegram-chat.ps1"
 function Assert($c,$m){ if(-not $c){ Write-Error "FAIL: $m"; exit 1 } }
 
 # --- Test-ChatEnabled: fails CLOSED. Only an explicit 'on' turns chat on. ---
