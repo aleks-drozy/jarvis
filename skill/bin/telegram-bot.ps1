@@ -99,23 +99,26 @@ function Select-ActionableUpdates {
   #   2. COLLAPSE - repeat/idempotent commands (debrief, status, help) keep only the LAST occurrence.
   #      Running /debrief four times produces four identical briefings and ~12 minutes of work.
   # Notes are NEVER collapsed: each note is distinct data and dropping one loses information.
+  # Chat messages are NEVER collapsed: two questions are two questions, and collapsing silently loses one.
   # An update with an unknown date is acted on (dropping a real command silently is the worse failure).
-  param($Updates, [datetime]$Now, [int]$MaxAgeMinutes = 10)
+  param($Updates, [datetime]$Now, [int]$MaxAgeMinutes = 10, [switch]$ChatEnabled)
   $fresh = New-Object System.Collections.Generic.List[object]
   foreach ($u in $Updates) {
     if ($null -ne $u.Date -and $u.Date -lt $Now.AddMinutes(-$MaxAgeMinutes)) { continue }   # stale
     $fresh.Add($u)
   }
-  # keep the LAST update per collapsible command; keep every note
+  # keep the LAST update per collapsible command; keep every note AND every chat message.
+  # -ChatEnabled MUST be threaded into Resolve-TelegramCommand here: without it, chat messages resolve
+  # to 'help' and collapse into one, silently discarding questions (the 2026-07-16 bug class).
   $lastOf = @{}
   foreach ($u in $fresh) {
-    $cmd = Resolve-TelegramCommand $u.Text
-    if ($cmd -ne 'note') { $lastOf[$cmd] = $u.UpdateId }
+    $cmd = Resolve-TelegramCommand -Text $u.Text -ChatEnabled:$ChatEnabled
+    if ($cmd -ne 'note' -and $cmd -ne 'chat') { $lastOf[$cmd] = $u.UpdateId }
   }
   $out = New-Object System.Collections.Generic.List[object]
   foreach ($u in $fresh) {
-    $cmd = Resolve-TelegramCommand $u.Text
-    if ($cmd -eq 'note') { $out.Add($u); continue }
+    $cmd = Resolve-TelegramCommand -Text $u.Text -ChatEnabled:$ChatEnabled
+    if ($cmd -eq 'note' -or $cmd -eq 'chat') { $out.Add($u); continue }
     if ($lastOf[$cmd] -eq $u.UpdateId) { $out.Add($u) }   # superseded duplicates are dropped
   }
   return $out

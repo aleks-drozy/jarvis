@@ -137,4 +137,20 @@ Assert ((@(Select-ActionableUpdates -Updates @() -Now $now -MaxAgeMinutes 10)).C
 $b = @( (U 1 '/debrief' $null) )
 Assert ((@(Select-ActionableUpdates -Updates $b -Now $now -MaxAgeMinutes 10)).Count -eq 1) "unknown date -> still acted on"
 
+# 7) chat messages are DATA like notes, never collapsed: two questions are two questions
+$b = @( (U 1 'how is the job hunt going' $fresh), (U 2 'and what about my balance' $fresh) )
+$act = @(Select-ActionableUpdates -Updates $b -Now $now -MaxAgeMinutes 10 -ChatEnabled)
+Assert ($act.Count -eq 2) "two chat questions both survive, got $($act.Count)"
+
+# 8) chat does not break the existing collapse: debriefs still collapse in the same batch
+$b = @( (U 1 '/debrief' $fresh), (U 2 'how is the job hunt going' $fresh), (U 3 '/debrief' $fresh) )
+$act = @(Select-ActionableUpdates -Updates $b -Now $now -MaxAgeMinutes 10 -ChatEnabled)
+Assert ($act.Count -eq 2) "1 collapsed debrief + 1 chat, got $($act.Count)"
+Assert (@($act | Where-Object { $_.UpdateId -eq 3 }).Count -eq 1) "the LAST /debrief still wins"
+
+# 9) without -ChatEnabled the old behaviour is intact: arbitrary text is 'help' and collapses
+$b = @( (U 1 'random text a' $fresh), (U 2 'random text b' $fresh) )
+$act = @(Select-ActionableUpdates -Updates $b -Now $now -MaxAgeMinutes 10)
+Assert ($act.Count -eq 1) "chat OFF: arbitrary text is help and still collapses, got $($act.Count)"
+
 Write-Host "telegram-bot: ALL PASS"
