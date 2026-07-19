@@ -291,7 +291,19 @@ function Invoke-ChatTurn {
   # job's own working directory (~\Documents), not the caller's, so an unresolved relative $ScopeDir
   # can silently pin the agent to the wrong directory with no error at all.
   if (-not (Test-Path -LiteralPath $ScopeDir -PathType Container)) { return $null }
-  $ScopeDir = (Resolve-Path -LiteralPath $ScopeDir).ProviderPath
+  # Resolve-Path gets its own try/catch: if the directory vanishes between the Test-Path check above
+  # and this line (a real, if narrow, race), Resolve-Path's default non-terminating error would
+  # otherwise leave $ScopeDir as $null - which then reaches Set-Location -LiteralPath $null inside the
+  # job as a PARAMETER-BINDING error, a failure class that -ErrorAction Stop on Set-Location does not
+  # upgrade to catch. -ErrorAction Stop here forces the failure to surface immediately, and the catch
+  # converts it to $null - same "environment not ready" contract as the token-load failure below. This
+  # also keeps the never-throw contract intact against a caller-set $ErrorActionPreference = 'Stop',
+  # which would otherwise let an uncaught Resolve-Path failure here propagate past this function.
+  try {
+    $ScopeDir = (Resolve-Path -LiteralPath $ScopeDir -ErrorAction Stop).ProviderPath
+  } catch {
+    return $null
+  }
 
   # Headless auth: same long-lived subscription token the 08:30 wrapper uses. A corrupt token file
   # (truncated XML, or content that does not deserialize to a SecureString) is the same class of
