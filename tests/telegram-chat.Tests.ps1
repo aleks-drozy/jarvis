@@ -284,4 +284,52 @@ Assert ($allowOccurrences -eq 1) "exactly one --allowedTools in telegram-chat.ps
 Assert ($chatSrc -match '--strict-mcp-config') "MCP servers must be disabled: connected servers would restore an outbound channel"
 Assert ($chatSrc -match '--add-dir') "the read scope must be pinned with --add-dir"
 
+# --- Important 7 fix: the checks above only ever inspected the CONSTANTS ($JarvisChatAllowedTools /
+# --- $JarvisChatDisallowedTools) and a bare substring count. Five concrete edits widen the effective
+# --- tool set while leaving every assertion above green: (1) a literal string replacing the flag's
+# --- value while the unused constant stays intact, (2) a concatenation expression wrapping the
+# --- constant, (3) an added --dangerously-skip-permissions/--permission-mode flag that makes the
+# --- allowlist moot, (4) deleting --disallowedTools from the invocation while leaving the constant
+# --- defined but unused, (5) a second 'claude -p' invocation elsewhere with no --allowedTools at
+# --- all. Assert against the INVOCATION itself, not just the constants' values.
+
+# the flag must be followed directly by a bare variable, never a quoted literal (catches 1)
+Assert ($chatSrc -match '--allowedTools\s+\$[A-Za-z_]\w*\s') "--allowedTools must be followed by a bare variable, not a literal"
+Assert ($chatSrc -notmatch "--allowedTools\s+'") "--allowedTools must never be followed by a single-quoted literal"
+Assert ($chatSrc -notmatch '--allowedTools\s+"') "--allowedTools must never be followed by a double-quoted literal"
+Assert ($chatSrc -match '--disallowedTools\s+\$[A-Za-z_]\w*\s') "--disallowedTools must be followed by a bare variable, not a literal"
+Assert ($chatSrc -notmatch "--disallowedTools\s+'") "--disallowedTools must never be followed by a single-quoted literal"
+Assert ($chatSrc -notmatch '--disallowedTools\s+"') "--disallowedTools must never be followed by a double-quoted literal"
+
+# the constant handed to the job must be the bare name, never concatenated or wrapped into an
+# expression - '($script:JarvisChatAllowedTools + '' Bash'')' would widen the effective set while
+# the flag still reads '--allowedTools $allow' and the constant itself still reads 'Read Glob Grep'
+# (catches 2)
+Assert ($chatSrc -notmatch '\$script:JarvisChatAllowedTools\s*\+') "the allowedTools constant must not be concatenated when passed to the job"
+Assert ($chatSrc -notmatch '\+\s*\$script:JarvisChatAllowedTools') "the allowedTools constant must not be concatenated when passed to the job"
+Assert ($chatSrc -notmatch '\(\s*\$script:JarvisChatAllowedTools') "the allowedTools constant must not be wrapped in an expression when passed to the job"
+Assert ($chatSrc -notmatch '\$script:JarvisChatDisallowedTools\s*\+') "the disallowedTools constant must not be concatenated when passed to the job"
+Assert ($chatSrc -notmatch '\+\s*\$script:JarvisChatDisallowedTools') "the disallowedTools constant must not be concatenated when passed to the job"
+
+# flags that make the allowlist moot entirely must never appear, in any documented spelling (catches 3)
+foreach ($bad in @('--dangerously-skip-permissions', '--allow-dangerously-skip-permissions', '--permission-mode')) {
+  Assert ($chatSrc -notmatch [regex]::Escape($bad)) "$bad must never appear in telegram-chat.ps1"
+}
+
+# --disallowedTools must actually appear in the invocation, not just live on as an unused constant
+# while someone deletes it from the command line (catches 4)
+$disallowOccurrences = [regex]::Matches($chatSrc, '--disallowedTools').Count
+Assert ($disallowOccurrences -eq 1) "exactly one --disallowedTools in telegram-chat.ps1, found $disallowOccurrences"
+
+# kebab-case aliases evade a grep for the camelCase form only - claude accepts both spellings for
+# both flags, so a rename here is a silent, working bypass of every check above
+Assert ($chatSrc -notmatch '--allowed-tools\b') "the kebab-case alias --allowed-tools must not be used either"
+Assert ($chatSrc -notmatch '--disallowed-tools\b') "the kebab-case alias --disallowed-tools must not be used either"
+
+# exactly one invocation of claude -p in the whole file - counting '--allowedTools' occurrences (the
+# original check, kept above) says nothing about a SECOND invocation elsewhere that has no
+# --allowedTools at all (catches 5)
+$claudeInvocations = [regex]::Matches($chatSrc, 'claude\s+-p\b').Count
+Assert ($claudeInvocations -eq 1) "exactly one 'claude -p' invocation in telegram-chat.ps1, found $claudeInvocations"
+
 Write-Host "telegram-chat: ALL PASS"
