@@ -291,6 +291,33 @@ Assert ($invocationBlock.Success) "could not locate the claude invocation block 
 Assert ($invocationBlock.Value -match '--strict-mcp-config') "MCP servers must be disabled ON THE INVOCATION ITSELF: connected servers would restore an outbound channel"
 Assert ($chatSrc -match '--add-dir') "the read scope must be pinned with --add-dir"
 
+# --- Fix 1: the guard pinned the MCP payload string (the Set-Content -Value literal below) but never
+# --- bound it to what --mcp-config actually loads. Changing the invocation to
+# --- --mcp-config (Join-Path $HOME '.claude.json'), or appending a second --mcp-config, restores MCP
+# --- servers - and with them an outbound channel - while every assertion above stayed green: the
+# --- payload assertion still finds and matches the now-unused Set-Content line, and
+# --- --strict-mcp-config is still present. Bind --mcp-config to $cfgPath specifically, and require it
+# --- appear exactly once in the invocation.
+Assert ($invocationBlock.Value -match '--mcp-config\s+\$cfgPath\b') 'the --mcp-config flag on the invocation must be passed $cfgPath specifically - a different path or variable would silently restore MCP servers'
+$mcpConfigOccurrences = [regex]::Matches($invocationBlock.Value, '--mcp-config').Count
+Assert ($mcpConfigOccurrences -eq 1) "--mcp-config must appear exactly once in the invocation, found $mcpConfigOccurrences"
+
+# --- Fix 2: nothing guarded the read-scope pin itself, only --add-dir's bare presence above. Three
+# --- edits restore a fail-open a prior round closed, and all three ship green today: deleting
+# --- -ErrorAction Stop from the job's Set-Location, deleting -PathType Container from the parent's
+# --- Test-Path, or deleting the parent's Resolve-Path line outright. Pin all three explicitly, plus
+# --- the ordering guarantee that makes the pin meaningful: Set-Location must be the FIRST executable
+# --- statement in the job scriptblock, since the pin is worthless if something reads before it.
+Assert ($chatSrc -match 'Test-Path\s+-LiteralPath\s+\$ScopeDir\s+-PathType\s+Container') "the parent's Test-Path check on ScopeDir must use -PathType Container, rejecting a FILE path"
+Assert ($chatSrc -match '\$ScopeDir\s*=\s*\(Resolve-Path\s+-LiteralPath\s+\$ScopeDir\b[^)]*\)\.ProviderPath') "the parent must resolve ScopeDir to an absolute path via Resolve-Path before handing it to the job"
+Assert ($chatSrc -match 'Set-Location\s+-LiteralPath\s+\$dir\s+-ErrorAction\s+Stop\b') "the job's Set-Location must use -ErrorAction Stop, or a vanished/renamed directory fails open"
+
+$jobBlockMatch = [regex]::Match($chatSrc, 'Start-Job\s+-ScriptBlock\s*\{([\s\S]*?)\}\s*-ArgumentList')
+Assert ($jobBlockMatch.Success) "could not locate the job scriptblock body in telegram-chat.ps1"
+$jobStatements = @(($jobBlockMatch.Groups[1].Value -split '\r?\n') | ForEach-Object { $_.Trim() } | Where-Object { $_ -and $_ -notmatch '^#' -and $_ -notmatch '^param\(' })
+Assert ($jobStatements.Count -gt 0) "the job scriptblock appears to have no executable statements"
+Assert ($jobStatements[0] -match '^Set-Location\s+-LiteralPath\s+\$dir\s+-ErrorAction\s+Stop\b') "Set-Location must be the FIRST executable statement in the job scriptblock (the pin is worthless if something reads before it), got: '$($jobStatements[0])'"
+
 # --- Critical 2 fix: the MCP config literal moved out of the invocation line into a separate
 # --- Set-Content -Value string (to dodge a PS 5.1 native-argument quoting bug), and no assertion
 # --- anywhere in this suite ever mentioned 'mcpServers' - so widening that one string to
