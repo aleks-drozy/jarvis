@@ -258,4 +258,41 @@ function Get-ChatHistory {
   return (($lines | Select-Object -Last ($Turns * 2)) -join "`n")
 }
 
+# THE LOCKDOWN. Enforced at the command line, not by asking the model nicely. Widening either of
+# these invalidates the security argument in the spec - tests/telegram-chat.Tests.ps1 will fail.
+$script:JarvisChatAllowedTools    = 'Read Glob Grep'
+$script:JarvisChatDisallowedTools = 'Bash Write Edit WebFetch WebSearch'
+
+function Invoke-ChatTurn {
+  # One headless turn. Returns the reply text, or $null if it timed out or failed (the caller turns
+  # that into a butler-voiced apology - never a silent miss).
+  # Run inside a job so a hung model call cannot wedge the poller past its window.
+  param([string]$Prompt, [string]$ScopeDir, [int]$TimeoutSec = 180)
+
+  # Headless auth: same long-lived subscription token the 08:30 wrapper uses.
+  $tokFile = Join-Path $HOME '.jarvis\claude-token.xml'
+  if (-not (Test-Path $tokFile)) { return $null }
+  $sec = Import-Clixml $tokFile
+  $env:CLAUDE_CODE_OAUTH_TOKEN = (New-Object System.Management.Automation.PSCredential('t', $sec)).GetNetworkCredential().Password
+
+  $job = Start-Job -ScriptBlock {
+    param($p, $allow, $deny, $dir, $tok)
+    $env:CLAUDE_CODE_OAUTH_TOKEN = $tok
+    & claude -p $p `
+      --allowedTools $allow `
+      --disallowedTools $deny `
+      --add-dir $dir `
+      --strict-mcp-config --mcp-config '{"mcpServers":{}}' `
+      --model sonnet `
+      --output-format text 2>&1
+  } -ArgumentList $Prompt, $script:JarvisChatAllowedTools, $script:JarvisChatDisallowedTools, $ScopeDir, $env:CLAUDE_CODE_OAUTH_TOKEN
+
+  $done = Wait-Job $job -Timeout $TimeoutSec
+  if (-not $done) { Stop-Job $job -ErrorAction SilentlyContinue; Remove-Job $job -Force -ErrorAction SilentlyContinue; return $null }
+  $out = (Receive-Job $job -ErrorAction SilentlyContinue | Out-String)
+  Remove-Job $job -Force -ErrorAction SilentlyContinue
+  if (-not $out -or -not $out.Trim()) { return $null }
+  return $out.Trim()
+}
+
 if ($DotSourceOnly) { return }
