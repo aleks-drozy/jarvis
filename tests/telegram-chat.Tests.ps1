@@ -237,4 +237,28 @@ Assert ($personaFlat -match '(?i)say so plainly.*rather than complying') "person
 Assert ($persona -match '(?i)cannot run commands|no commands|never run') "persona states it cannot execute"
 Assert ($persona -match '(?i)sir') "persona keeps the butler address"
 
+# --- audit log: every turn recorded, history reads back the most recent turns ---
+$logTmp = Join-Path $env:TEMP ('jarvis-chatlog-' + [guid]::NewGuid().ToString('N') + '.log')
+
+Assert ((Get-ChatHistory -LogPath $logTmp) -eq '') "no log file -> empty history"
+
+Write-ChatLog -Message 'first question' -Reply 'first answer' -LogPath $logTmp
+Assert (Test-Path $logTmp) "log file is created on first write"
+$h = Get-ChatHistory -LogPath $logTmp
+Assert ($h -match 'first question' -and $h -match 'first answer') "history contains the turn"
+
+# multi-line input must be flattened so one turn stays greppable as lines
+Write-ChatLog -Message "line one`nline two" -Reply "reply one`nreply two" -LogPath $logTmp
+$raw = Get-Content $logTmp
+Assert ((@($raw | Where-Object { $_ -match 'line one line two' })).Count -eq 1) "newlines flattened in the logged message"
+
+# history is capped at the requested number of turns (2 lines per turn)
+1..10 | ForEach-Object { Write-ChatLog -Message "q$_" -Reply "a$_" -LogPath $logTmp }
+$h = Get-ChatHistory -Turns 3 -LogPath $logTmp
+Assert ((@($h -split "`n")).Count -le 6) "3 turns -> at most 6 lines, got $((@($h -split "`n")).Count)"
+Assert ($h -match 'q10' -and $h -match 'a10') "history keeps the MOST RECENT turns"
+Assert ($h -notmatch 'first question') "history drops older turns"
+
+Remove-Item $logTmp -Force
+
 Write-Host "telegram-chat: ALL PASS"
