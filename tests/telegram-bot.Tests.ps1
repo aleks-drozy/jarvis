@@ -305,6 +305,19 @@ Assert ($script:MockSentMessages.Count -eq 2) "superseded+fresh chat: one ack + 
 Assert (@($script:MockSentMessages | Where-Object { $_.Text -match 'let it lie' }).Count -eq 1) "the superseded question is acknowledged, not silently dropped"
 Assert (@($script:MockSentMessages | Where-Object { $_.Text -eq 'Fresh answer, Sir.' }).Count -eq 1) "the fresh question still gets a real, unmodified reply"
 Assert ($script:MockChatTurnCalls.Count -eq 1) "only the fresh question reaches the model, the superseded one does not"
+Assert ($script:JarvisChatTurnHandled) "Fix 5: a real chat turn being handled DOES set the chat-turn flag (the warm window is allowed to open)"
+
+# 13) Fix 5: the warm window (see -Once in telegram-bot.ps1) exists for CONVERSATIONAL latency. The old
+# --- gate was '$n -gt 0' - ANY handled command, so texting /status held the process open for 5 minutes
+# --- for something that never needed it. Prove a handled NON-chat command (a note) leaves the
+# --- chat-turn flag false, even though it is counted in $handled same as before.
+Reset-TelegramMocks
+$script:JarvisChatTurnHandled = $true   # poison the flag first so a wrongly-left-true value cannot pass silently
+$script:MockGetUpdatesResult = @( (New-FakeUpdate -Id 801 -ChatId 555 -Text 'note buy protein' -MinutesAgo 1) )
+$handled = Invoke-PollOnce -Cred $mockCred -TimeoutSec 5
+Assert ($handled -eq 1) "Fix 5: the non-chat command is still handled normally, got $handled"
+Assert (-not $script:JarvisChatTurnHandled) "Fix 5: a handled NON-chat command must leave the chat-turn flag false, so the warm window stays shut"
+Assert ($script:MockChatTurnCalls.Count -eq 0) "Fix 5: a non-chat command never calls the model"
 
 # clean up the throwaway temp state BEFORE restoring the script-scope variables these tests borrowed -
 # reassigning $OffsetPath back to the real path first would make this delete the wrong (real) file

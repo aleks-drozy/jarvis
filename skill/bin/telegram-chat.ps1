@@ -87,11 +87,53 @@ function Protect-CollectorDelimiter {
   # open a fake block before it is appended.
   param([string]$Text)
   if (-not $Text) { return $Text }
-  $lines = $Text -split "`r?`n"
+  # Fix 2: split on ANY run of CR/LF, not just '\r?\n'. A lone CR is not matched by '\r?\n' at all, so
+  # a CR-delimited forged '## collector: bank' header used to sail through this guard byte-identical -
+  # same root cause as the Write-ChatLog forged-history bug (Fix 1), since .NET's line-reading treats a
+  # bare CR as a terminator on its own.
+  $lines = $Text -split '[\r\n]+'
   for ($i = 0; $i -lt $lines.Count; $i++) {
     if ($lines[$i] -match '^\s*##') { $lines[$i] = '(blocked delimiter) ' + $lines[$i] }
   }
   return ($lines -join "`n")
+}
+
+function Invoke-ChatCollectorProcess {
+  # Fix 3: run one collector as a child process bounded by $TimeoutSec of wall clock. Returns
+  # @{ Output; ExitCode; TimedOut }. This exists because get-bank-data.ps1 calls Invoke-RestMethod with
+  # no -TimeoutSec and check-job-mail.ps1 opens a raw TcpClient with no connect timeout (then fetches up
+  # to 40 messages) - either can hang indefinitely, and this whole chat path runs inline inside a
+  # scheduled task with a hard ExecutionTimeLimit=PT10M, AFTER the Telegram offset has already been
+  # consumed. A hung feed used to kill the poller mid-prefetch with no reply and no apology sent, and
+  # the owner's question already gone.
+  # Kill the process TREE on timeout (taskkill /T /F), not just this .NET Process handle - same reason
+  # Invoke-ChatTurn already does this for the claude job: a child can itself spawn further children that
+  # would otherwise survive as orphans past the very timeout they were meant to respect.
+  # Stdout/stderr reads are started ASYNCHRONOUSLY, before WaitForExit: reading only after the process
+  # exits risks the classic redirected-process deadlock if a collector writes more than the OS pipe
+  # buffer holds before anything drains it.
+  param([string]$Path, [double]$TimeoutSec)
+  $psi = New-Object System.Diagnostics.ProcessStartInfo
+  $psi.FileName = 'powershell'
+  $psi.Arguments = "-NoProfile -File `"$Path`""
+  $psi.RedirectStandardOutput = $true
+  $psi.RedirectStandardError  = $true
+  $psi.UseShellExecute = $false
+  $psi.CreateNoWindow  = $true
+  $proc = [System.Diagnostics.Process]::Start($psi)
+  $stdoutTask = $proc.StandardOutput.ReadToEndAsync()
+  $stderrTask = $proc.StandardError.ReadToEndAsync()   # drained only so the child cannot block on it
+  $timeoutMs = [Math]::Max(0, [int]($TimeoutSec * 1000))
+  $exited = $proc.WaitForExit($timeoutMs)
+  if (-not $exited) {
+    try { & taskkill /PID $proc.Id /T /F 2>$null | Out-Null } catch { }
+    try { $proc.Dispose() } catch { }
+    return @{ Output = ''; ExitCode = $null; TimedOut = $true }
+  }
+  $out = $stdoutTask.Result
+  $code = $proc.ExitCode
+  $proc.Dispose()
+  return @{ Output = $out; ExitCode = $code; TimedOut = $false }
 }
 
 function Invoke-ChatPrefetch {
@@ -99,10 +141,18 @@ function Invoke-ChatPrefetch {
   # Each is invoked with NO arguments - nothing from the message is passed through. A collector that
   # fails is reported as unavailable rather than omitted, so the grounding rule makes Jarvis SAY the
   # feed is down instead of quietly answering from stale numbers.
+  # Fix 3: bounded by a TOTAL wall-clock budget shared across ALL requested collectors, not a
+  # per-collector timeout - what is being protected is the enclosing scheduled task's hard 10-minute
+  # kill, and that budget does not grow just because one message happened to trigger more collectors.
+  # A collector that runs past the shared deadline (including one that never gets a turn at all because
+  # an earlier collector used up the whole budget) is reported "unavailable: timed out" - the same
+  # convention as every other failure path here - so the grounding rule still makes Jarvis say the feed
+  # is down instead of quietly answering without it.
   param(
     [string[]]$Names,
     [string]$BinDir,
-    [string]$HeartbeatPath = (Join-Path $HOME '.jarvis\bank-heartbeat.json')
+    [string]$HeartbeatPath = (Join-Path $HOME '.jarvis\bank-heartbeat.json'),
+    [int]$BudgetSec = 60
   )
   if (-not $Names -or $Names.Count -eq 0) { return '' }
   $scripts = @{
@@ -111,19 +161,20 @@ function Invoke-ChatPrefetch {
     calendar = 'get-calendar.ps1'
   }
   $sb = New-Object System.Text.StringBuilder
+  $deadline = (Get-Date).AddSeconds($BudgetSec)
   foreach ($n in $Names) {
     if (-not ($script:JarvisChatCollectors -contains $n)) { continue }   # belt and braces
     $path = Join-Path $BinDir $scripts[$n]
     [void]$sb.AppendLine("## collector: $n")
     if (-not (Test-Path $path)) { [void]$sb.AppendLine("unavailable: $($scripts[$n]) not found"); continue }
+    $remaining = ($deadline - (Get-Date)).TotalSeconds
+    if ($remaining -le 0) { [void]$sb.AppendLine('unavailable: timed out'); continue }
     try {
-      # No 2>&1 here: on a NATIVE command, merging stderr wraps every stderr line in a terminating
-      # NativeCommandError under $ErrorActionPreference='Stop', even when the child exits 0 - that
-      # would discard perfectly good stdout over one benign warning line (same trap documented at
-      # get-bank-data.ps1 ~line 70). Capture stdout only and judge success from $LASTEXITCODE instead.
-      $res = (& powershell -NoProfile -File $path | Out-String)
-      if ($LASTEXITCODE -ne 0) { [void]$sb.AppendLine("unavailable: exit $LASTEXITCODE"); continue }
-      $res = $res.Trim()
+      $r = Invoke-ChatCollectorProcess -Path $path -TimeoutSec $remaining
+      if ($r.TimedOut) { [void]$sb.AppendLine('unavailable: timed out'); continue }
+      if ($r.ExitCode -ne 0) { [void]$sb.AppendLine("unavailable: exit $($r.ExitCode)"); continue }
+      $res = $r.Output
+      if ($res) { $res = $res.Trim() }
       if (-not $res) { [void]$sb.AppendLine('unavailable: collector returned nothing'); continue }
       # Some collectors (get-bank-data.ps1 by design) exit 0 on every failure path and report the
       # failure IN-BAND as {"error": "..."} - a clean exit code alone would miss this.
@@ -250,8 +301,13 @@ function Write-ChatLog {
   $dir = Split-Path $LogPath
   if ($dir -and -not (Test-Path $dir)) { New-Item -ItemType Directory -Force -Path $dir | Out-Null }
   $ts  = (Get-Date).ToString('s')
-  $m   = if ($Message) { $Message -replace '\r?\n', ' ' } else { '' }
-  $r   = if ($Reply)   { $Reply   -replace '\r?\n', ' ' } else { '' }
+  # Fix 1: flatten ANY run of CR/LF, not just '\r?\n'. A LONE CR is not matched by '\r?\n' at all, yet
+  # .NET's line-reading (what Get-ChatHistory's Get-Content relies on) treats a bare CR as its own line
+  # terminator - so a pasted message containing a lone CR followed by a forged "[timestamp] JARVIS: ..."
+  # remainder used to survive as a SEPARATE, '^['-matching line: a fabricated prior Jarvis turn, with a
+  # plausible timestamp, entering the next prompt as trusted history. Demonstrated in review.
+  $m   = if ($Message) { $Message -replace '[\r\n]+', ' ' } else { '' }
+  $r   = if ($Reply)   { $Reply   -replace '[\r\n]+', ' ' } else { '' }
   Add-Content -Encoding UTF8 -Path $LogPath -Value "[$ts] ALEX: $m"
   Add-Content -Encoding UTF8 -Path $LogPath -Value "[$ts] JARVIS: $r"
 }
