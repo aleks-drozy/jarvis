@@ -462,6 +462,38 @@ foreach ($tok in $chatTokens) {
 }
 $chatSrcNoComments = $strippedSb.ToString()
 
+# --- ...AND A SECOND VARIANT WITH STRING LITERALS BLANKED TOO -----------------------------------
+# Blanking comments closed one hole and left its twin wide open. An assertion that claims "this CODE
+# exists" is equally satisfied by the same characters sitting inside a STRING LITERAL, and a string
+# literal is far easier to plant deliberately than a comment is to exploit accidentally. Concretely:
+# delete 'if (-not $result.Drained) { return $null }' and add
+#   $gateNote = 'if (-not $result.Drained) { return $null }'
+# anywhere in the file, and the assertion pinning that gate stays green while a prompt the child never
+# drained is accepted. The same trick re-arms every one of the delivery gates, the HasExited sample and
+# the Set-Location pin.
+#
+# So the structural assertions are split across TWO views of the source, deliberately:
+#   $chatSrcNoComments - comments blanked. Used where the thing being pinned genuinely IS a string
+#                        literal in the real code: the flag names ('--allowedTools'), the MCP payload,
+#                        the receipt's ValidatePattern. These cannot use the code-only view because
+#                        the code-only view is precisely what removes them.
+#   $chatSrcCodeOnly   - comments AND string literals blanked. Used for every assertion about
+#                        EXECUTABLE code, which is now unsatisfiable by any quoted text anywhere.
+# Offsets are preserved in both (characters are overwritten with spaces, never deleted), so the two
+# views index identically and the IndexOf-based ordering assertions can slice either one.
+$codeOnlySb = New-Object System.Text.StringBuilder $chatSrcNoComments
+$chatStringTokenCount = 0
+foreach ($tok in $chatTokens) {
+  if ($tok.Type -eq [System.Management.Automation.PSTokenType]::String) {
+    $chatStringTokenCount++
+    for ($ci = 0; $ci -lt $tok.Length; $ci++) {
+      $chAt = $codeOnlySb[$tok.Start + $ci]
+      if ($chAt -ne "`r" -and $chAt -ne "`n") { $codeOnlySb[$tok.Start + $ci] = ' ' }
+    }
+  }
+}
+$chatSrcCodeOnly = $codeOnlySb.ToString()
+
 # POSITIVE CONTROLS for the stripper itself. A stripper that silently did nothing would return the
 # raw source and every assertion below would quietly revert to being comment-satisfiable, with this
 # suite reporting the repair as in place. Three independent checks: it ran, it preserved offsets, and
@@ -470,8 +502,20 @@ Assert ($chatSrcNoComments.Length -eq $chatSrc.Length) "the comment stripper mus
 Assert ($chatSrcNoComments -ne $chatSrc) "the comment stripper removed nothing at all - it is not working, so every structural assertion below is silently matching comments again"
 Assert ($chatSrc -match 'WaitForPipeDrain\(\) returns once') "the explanatory comment that defeated the drain assertion must still be present in the RAW source, or this positive control is not testing anything"
 Assert ($chatSrcNoComments -notmatch 'WaitForPipeDrain\(\) returns once') "the comment stripper must have removed the explanatory comment text that satisfied the drain assertion by itself"
-$drainInCode = [regex]::Matches($chatSrcNoComments, 'WaitForPipeDrain').Count
+$drainInCode = [regex]::Matches($chatSrcCodeOnly, 'WaitForPipeDrain').Count
 Assert ($drainInCode -eq 1) "WaitForPipeDrain must appear exactly once in real CODE, found $drainInCode"
+
+# POSITIVE CONTROLS for the code-only view, mirroring the four above. Same failure mode, same remedy:
+# a string-blanker that silently did nothing would leave $chatSrcCodeOnly equal to $chatSrcNoComments
+# and every code assertion below would quietly revert to being satisfiable by a planted string literal.
+Assert ($chatSrcCodeOnly.Length -eq $chatSrc.Length) "the string blanker must preserve offsets, got $($chatSrcCodeOnly.Length) vs $($chatSrc.Length)"
+Assert ($chatStringTokenCount -gt 0) "the tokenizer found NO string tokens in telegram-chat.ps1 - the code-only view is not blanking anything, so every assertion using it is silently matching quoted text again"
+Assert ($chatSrcCodeOnly -ne $chatSrcNoComments) "the string blanker removed nothing at all relative to the comment-stripped view"
+# the flag names live in string literals in the real code, so their ABSENCE from the code-only view is
+# what proves that view is doing its job - and that a planted string literal cannot satisfy a code check
+Assert ($chatSrcNoComments -match '--allowedTools') "the --allowedTools literal must be present in the comment-stripped view, or the control below is not testing anything"
+Assert ($chatSrcCodeOnly -notmatch '--allowedTools') "the code-only view must NOT contain the --allowedTools string literal - if it does, string blanking is not happening and every code assertion is satisfiable by quoted text"
+Assert ($chatSrcCodeOnly -notmatch 'mcpServers') "the code-only view must not contain the MCP payload literal either"
 
 $allowOccurrences = [regex]::Matches($chatSrcNoComments, '--allowedTools').Count
 Assert ($allowOccurrences -eq 1) "exactly one --allowedTools in telegram-chat.ps1, found $allowOccurrences"
@@ -541,13 +585,18 @@ Assert ($mcpConfigOccurrences -eq 1) "--mcp-config must appear exactly once in t
 # --- Test-Path, or deleting the parent's Resolve-Path line outright. Pin all three explicitly, plus
 # --- the ordering guarantee that makes the pin meaningful: Set-Location must be the FIRST executable
 # --- statement in the job scriptblock, since the pin is worthless if something reads before it.
-Assert ($chatSrcNoComments -match 'Test-Path\s+-LiteralPath\s+\$ScopeDir\s+-PathType\s+Container') "the parent's Test-Path check on ScopeDir must use -PathType Container, rejecting a FILE path"
-Assert ($chatSrcNoComments -match '\$ScopeDir\s*=\s*\(Resolve-Path\s+-LiteralPath\s+\$ScopeDir\b[^)]*\)\.ProviderPath') "the parent must resolve ScopeDir to an absolute path via Resolve-Path before handing it to the job"
-Assert ($chatSrcNoComments -match 'Set-Location\s+-LiteralPath\s+\$dir\s+-ErrorAction\s+Stop\b') "the job's Set-Location must use -ErrorAction Stop, or a vanished/renamed directory fails open"
+Assert ($chatSrcCodeOnly -match 'Test-Path\s+-LiteralPath\s+\$ScopeDir\s+-PathType\s+Container') "the parent's Test-Path check on ScopeDir must use -PathType Container, rejecting a FILE path"
+Assert ($chatSrcCodeOnly -match '\$ScopeDir\s*=\s*\(Resolve-Path\s+-LiteralPath\s+\$ScopeDir\b[^)]*\)\.ProviderPath') "the parent must resolve ScopeDir to an absolute path via Resolve-Path before handing it to the job"
+Assert ($chatSrcCodeOnly -match 'Set-Location\s+-LiteralPath\s+\$dir\s+-ErrorAction\s+Stop\b') "the job's Set-Location must use -ErrorAction Stop, or a vanished/renamed directory fails open"
 
 $jobBlockMatch = [regex]::Match($chatSrcNoComments, 'Start-Job\s+-ScriptBlock\s*\{([\s\S]*?)\}\s*-ArgumentList')
 Assert ($jobBlockMatch.Success) "could not locate the job scriptblock body in telegram-chat.ps1"
 $jobBody = $jobBlockMatch.Groups[1].Value
+# The SAME span of the code-only view. Both views are offset-preserving overwrites of one source, so
+# the group's Index/Length index either identically - which is what lets the code assertions below run
+# against a job body with every string literal blanked, while the flag assertions keep the literals.
+$jobBodyCode = $chatSrcCodeOnly.Substring($jobBlockMatch.Groups[1].Index, $jobBlockMatch.Groups[1].Length)
+Assert ($jobBodyCode.Length -eq $jobBody.Length) "the two views of the job body must be the same length, or the offset-preserving property has been broken"
 $jobStatements = @(($jobBody -split '\r?\n') | ForEach-Object { $_.Trim() } | Where-Object { $_ -and $_ -notmatch '^#' -and $_ -notmatch '^param\(' })
 Assert ($jobStatements.Count -gt 0) "the job scriptblock appears to have no executable statements"
 Assert ($jobStatements[0] -match '^Set-Location\s+-LiteralPath\s+\$dir\s+-ErrorAction\s+Stop\b') "Set-Location must be the FIRST executable statement in the job scriptblock (the pin is worthless if something reads before it), got: '$($jobStatements[0])'"
@@ -579,36 +628,80 @@ Assert ($jobStatements[0] -match '^Set-Location\s+-LiteralPath\s+\$dir\s+-ErrorA
 # --- The write is now driven through System.Diagnostics.Process so it is OBSERVABLE, and the three
 # --- observations are asserted individually below. Each is separately necessary, and each was
 # --- measured to be individually INSUFFICIENT, so none may be deleted as redundant.
-Assert ($jobBody -match '\$stdin\s*=\s*\$proc\.StandardInput\.BaseStream') 'the prompt must be written to the child'"'"'s stdin through System.Diagnostics.Process, so the write is observable - a native pipeline reports NOTHING when the child stops reading early'
-Assert ($jobBody -match '\$stdin\.Write\(\$promptBytes,\s*\$delivered,\s*\$n\)') 'the prompt bytes must be written to that stream directly'
+Assert ($jobBodyCode -match '\$stdin\s*=\s*\$proc\.StandardInput\.BaseStream') 'the prompt must be written to the child'"'"'s stdin through System.Diagnostics.Process, so the write is observable - a native pipeline reports NOTHING when the child stops reading early'
+Assert ($jobBodyCode -match '\$stdin\.Write\(\$promptBytes,\s*\$delivered,\s*\$n\)') 'the prompt bytes must be written to that stream directly'
 # (1) short write: bytes handed to the pipe are counted, so a write that dies mid-prompt is a NUMBER
-Assert ($jobBody -match '\$delivered\s*\+=\s*\$n') 'the job must COUNT the bytes it delivered - a partial write has to be observable as a number, not inferred'
+Assert ($jobBodyCode -match '\$delivered\s*\+=\s*\$n') 'the job must COUNT the bytes it delivered - a partial write has to be observable as a number, not inferred'
 # (2) drain: WaitForPipeDrain returns once the pipe buffer is empty. Measured: the OS buffer swallowed
 # 65536 bytes without ever blocking the write, so the short-write count alone misses the whole
 # realistic prompt range and this check is what covers it.
-Assert ($jobBody -match 'WaitForPipeDrain\(\)') 'the job must wait for the child to DRAIN the pipe - the OS buffer absorbs a whole realistic prompt without blocking the write, so a short read is otherwise invisible'
+Assert ($jobBodyCode -match 'WaitForPipeDrain\(\)') 'the job must wait for the child to DRAIN the pipe - the OS buffer absorbs a whole realistic prompt without blocking the write, so a short read is otherwise invisible'
 # (3) exit-before-EOF: the decisive one. Measured: once the child exits, its unread buffer is
 # DISCARDED and WaitForPipeDrain then returns SUCCESS, so a successful drain does NOT prove the child
 # read anything. EOF is ours to send and is sent only after the drain, so a child that has already
 # exited at that moment cannot have read to the end of the prompt. The sample must therefore happen
 # BEFORE the close - taken after it, it would report nothing but normal termination.
-Assert ($jobBody -match '\$exitedBeforeEof\s*=\s*\$proc\.HasExited') 'the job must sample HasExited BEFORE sending EOF - a successful drain alone cannot distinguish "the child read it all" from "the child died and the buffered prompt was discarded"'
-$eofSampleIdx = $jobBody.IndexOf('$exitedBeforeEof = $proc.HasExited')
-$eofCloseIdx  = $jobBody.IndexOf('$stdin.Close()')
+Assert ($jobBodyCode -match '\$exitedBeforeEof\s*=\s*\$proc\.HasExited') 'the job must sample HasExited BEFORE sending EOF - a successful drain alone cannot distinguish "the child read it all" from "the child died and the buffered prompt was discarded"'
+$eofSampleIdx = $jobBodyCode.IndexOf('$exitedBeforeEof = $proc.HasExited')
+$eofCloseIdx  = $jobBodyCode.IndexOf('$stdin.Close()')
 Assert ($eofSampleIdx -ge 0 -and $eofCloseIdx -gt $eofSampleIdx) 'the HasExited sample must come BEFORE $stdin.Close() - EOF is what makes a legitimate child exit, so a sample taken after the close proves nothing'
 # EOF must be sent by closing the BaseStream, never $proc.StandardInput: that StreamWriter carries the
 # console encoding's preamble and flushing it appends a byte order mark AFTER the prompt (measured: a
 # host with a UTF-8 console added ef bb bf, corrupting the byte-identity this whole section defends).
-Assert ($jobBody -notmatch '\$proc\.StandardInput\.Close\(\)') 'EOF must be sent by closing the BaseStream, not $proc.StandardInput - flushing that StreamWriter appends the console encoding preamble as trailing bytes after the prompt'
+Assert ($jobBodyCode -notmatch '\$proc\.StandardInput\.Close\(\)') 'EOF must be sent by closing the BaseStream, not $proc.StandardInput - flushing that StreamWriter appends the console encoding preamble as trailing bytes after the prompt'
 # stderr is drained so the child cannot block on it, and its content must never reach the reply
-Assert ($jobBody -notmatch '\$errTask\.Result') 'the stderr task result must never be read - CLI error text (file paths, stack traces, auth fragments) would flow back to Alex looking like Jarvis talking'
-Assert ($jobBody -match 'Output\s*=\s*\$stdout\b') 'the reply must be built from the stdout task alone'
+Assert ($jobBodyCode -notmatch '\$errTask\.Result') 'the stderr task result must never be read - CLI error text (file paths, stack traces, auth fragments) would flow back to Alex looking like Jarvis talking'
+Assert ($jobBodyCode -match 'Output\s*=\s*\$stdout\b') 'the reply must be built from the stdout task alone'
 # and the parent must ACT on all four observations. A recorded failure that nothing checks is not a
 # guard: this is the gate that turns a short read into $null instead of a confident wrong answer.
-Assert ($chatSrcNoComments -match 'if\s*\(\$result\.DeliveryError\)\s*\{\s*return\s*\$null\s*\}') 'Invoke-ChatTurn must return $null when the job reports a delivery error'
-Assert ($chatSrcNoComments -match 'if\s*\(-not\s*\$result\.Drained\)\s*\{\s*return\s*\$null\s*\}') 'Invoke-ChatTurn must return $null when the prompt was never drained by the child'
-Assert ($chatSrcNoComments -match 'if\s*\(\$result\.ExitedBeforeEof\)\s*\{\s*return\s*\$null\s*\}') 'Invoke-ChatTurn must return $null when the child exited before EOF - that is the signal a short read produces'
-Assert ($chatSrcNoComments -match '\$result\.Delivered\s*-ne\s*\$result\.PromptBytes') 'Invoke-ChatTurn must return $null unless every prompt byte was delivered'
+# The gates live in Test-ChatDelivery, which is what makes them probeable BEHAVIOURALLY (immediately
+# below) instead of only as source text. Both halves are pinned: the gates exist in that function, and
+# Invoke-ChatTurn actually consults it.
+Assert ($chatSrcCodeOnly -match 'if\s*\(\$Result\.DeliveryError\)\s*\{\s*return\s*\$false\s*\}') 'Test-ChatDelivery must refuse a result that reports a delivery error'
+Assert ($chatSrcCodeOnly -match 'if\s*\(-not\s*\$Result\.Drained\)\s*\{\s*return\s*\$false\s*\}') 'Test-ChatDelivery must refuse a result whose prompt was never drained by the child'
+Assert ($chatSrcCodeOnly -match 'if\s*\(\$Result\.ExitedBeforeEof\)\s*\{\s*return\s*\$false\s*\}') 'Test-ChatDelivery must refuse a result where the child exited before EOF - that is the signal a short read produces'
+Assert ($chatSrcCodeOnly -match '\$Result\.Delivered\s*-ne\s*\$Result\.PromptBytes') 'Test-ChatDelivery must refuse unless every prompt byte was delivered'
+Assert ($chatSrcCodeOnly -match '\$Result\.PromptBytes\s*-le\s*0') 'Test-ChatDelivery must refuse a zero-length prompt outright - otherwise Delivered -eq PromptBytes is satisfied trivially by 0 -eq 0'
+Assert ($chatSrcCodeOnly -match '\$Result\.ExitCode\s*-ne\s*0') 'Test-ChatDelivery must refuse a non-zero claude exit'
+Assert ($chatSrcCodeOnly -match 'if\s*\(-not\s*\(Test-ChatDelivery\s+\$result\)\)\s*\{\s*return\s*\$null\s*\}') 'Invoke-ChatTurn must CONSULT Test-ChatDelivery and return $null when it refuses - gates nothing calls are not gates'
+
+# --- ...AND EACH GATE, BEHAVIOURALLY. This is the point of extracting the function --------------
+# Every assertion above is still only text matching, and text matching is exactly what the decoys in
+# this file's history walked past. Test-ChatDelivery takes the job's result object, so each gate can be
+# exercised for a REAL reason: build the result of a perfect turn, flip ONE field, require a refusal.
+# Delete any single line from Test-ChatDelivery and the corresponding case below goes red because a
+# result that must be refused is accepted - no regex involved.
+function New-DeliveryResult {
+  # the shape Invoke-ChatTurn's job emits on a flawless turn
+  param($Override = @{})
+  $r = @{ DeliveryError = ''; Drained = $true; ExitedBeforeEof = $false
+          PromptBytes = 15271; Delivered = 15271; ExitCode = 0; Output = 'a reply' }
+  foreach ($k in $Override.Keys) { $r[$k] = $Override[$k] }
+  return [pscustomobject]$r
+}
+# POSITIVE CONTROL FIRST: the good result must be ACCEPTED. Without this, a Test-ChatDelivery that
+# refused everything unconditionally would pass every refusal case below while taking the whole chat
+# surface down in production.
+Assert (Test-ChatDelivery (New-DeliveryResult)) 'Test-ChatDelivery must ACCEPT a result in which the child demonstrably read the whole prompt and exited 0 - a gate that refuses everything is not a gate, it is an outage'
+# one flipped field per gate, each independently sufficient to refuse
+Assert (-not (Test-ChatDelivery (New-DeliveryResult @{ DeliveryError = 'the pipe was closed' }))) 'DELIVERY GATE (DeliveryError): a result reporting a failed write must be refused - the child was left holding a partial prompt'
+Assert (-not (Test-ChatDelivery (New-DeliveryResult @{ Drained = $false }))) 'DELIVERY GATE (Drained): a result whose pipe never emptied must be refused - the OS buffer absorbs a whole realistic prompt without blocking the write, so this is the only observation that sees a stalled reader'
+Assert (-not (Test-ChatDelivery (New-DeliveryResult @{ ExitedBeforeEof = $true }))) 'DELIVERY GATE (ExitedBeforeEof): a child already gone before EOF was sent cannot have read to the end of the prompt - EOF is what ends a stdin-read prompt, so it cannot legitimately exit first'
+Assert (-not (Test-ChatDelivery (New-DeliveryResult @{ Delivered = 15071 }))) 'DELIVERY GATE (Delivered -ne PromptBytes): a short write is a NUMBER and must be refused as one'
+Assert (-not (Test-ChatDelivery (New-DeliveryResult @{ Delivered = 15272 }))) 'DELIVERY GATE: MORE bytes delivered than the prompt held is just as wrong as fewer, and the check is an inequality for that reason'
+Assert (-not (Test-ChatDelivery (New-DeliveryResult @{ PromptBytes = 0; Delivered = 0 }))) 'DELIVERY GATE (PromptBytes -le 0): an empty prompt must be refused, not waved through because 0 equals 0'
+Assert (-not (Test-ChatDelivery (New-DeliveryResult @{ ExitCode = 3 }))) 'DELIVERY GATE (ExitCode): a non-zero claude exit must be refused'
+Assert (-not (Test-ChatDelivery (New-DeliveryResult @{ ExitCode = $null }))) 'DELIVERY GATE (ExitCode): a MISSING exit code must be refused too - that is what the job emits when it never got as far as reading one'
+# never throws, whatever it is handed: it sits inside Invoke-ChatTurn's absolute never-throw contract
+$dgThrew = $false
+try {
+  $null = Test-ChatDelivery $null
+  $null = Test-ChatDelivery ([pscustomobject]@{})
+  $null = Test-ChatDelivery 'not an object at all'
+} catch { $dgThrew = $true }
+Assert (-not $dgThrew) 'Test-ChatDelivery must never throw - it runs inside Invoke-ChatTurn, whose contract is that every failure returns $null'
+Assert (-not (Test-ChatDelivery $null)) 'a null result must be refused'
+Assert (-not (Test-ChatDelivery ([pscustomobject]@{}))) 'a result missing every observation must be refused, not accepted because its absent fields read as falsy in the convenient direction'
 # --- Fence repair (Fix 2): this assertion used to read
 # ---   $invocationBlock.Value -notmatch 'claude\s+(?:-p|--print)(?:\s|`)*\$'
 # --- which is anchored IMMEDIATELY after the flag and only rejects a positional whose first
@@ -632,9 +725,9 @@ Assert ($invocationBlock.Value -notmatch '\$\{?p\}?(?![A-Za-z0-9_])') "the promp
 # as 0x3F. The bytes are now produced directly, which removes the dependence on host state entirely,
 # so the assertion pins the ENCODER: a no-BOM UTF8Encoding applied to the prompt itself. The no-BOM
 # ctor stays load-bearing - the BOM-ful one would prepend ef bb bf to the front of the persona.
-Assert ($jobBody -match '\$promptBytes\s*=\s*\(New-Object\s+System\.Text\.UTF8Encoding\(\s*\$false\s*\)\)\.GetBytes\(\$p\)') 'the job must encode the prompt itself as no-BOM UTF-8 INSIDE the scriptblock, or non-ASCII characters are mangled by whatever the host encoding happens to be'
-$encIdx = $jobBody.IndexOf('$promptBytes')
-$locIdx = $jobBody.IndexOf('Set-Location')
+Assert ($jobBodyCode -match '\$promptBytes\s*=\s*\(New-Object\s+System\.Text\.UTF8Encoding\(\s*\$false\s*\)\)\.GetBytes\(\$p\)') 'the job must encode the prompt itself as no-BOM UTF-8 INSIDE the scriptblock, or non-ASCII characters are mangled by whatever the host encoding happens to be'
+$encIdx = $jobBodyCode.IndexOf('$promptBytes')
+$locIdx = $jobBodyCode.IndexOf('Set-Location')
 Assert ($locIdx -ge 0 -and $encIdx -gt $locIdx) 'the prompt encoding must come AFTER Set-Location - the scope pin has to stay the first statement in the job'
 # ...and the REPLY's decoding is pinned too. The job host's console code page is ibm850 (measured), so
 # leaving stdout decoding to the host mangles every non-ASCII character on the way back - and the
@@ -663,7 +756,7 @@ Assert ($inputFormatOccurrences -eq 1) "--input-format must appear exactly once 
 # --- The job body must never rewrite the prompt either. '$p = $p.Substring(0,100)' inserted here
 # --- passes every other assertion in this guard - including the first-statement check - while
 # --- silently truncating the prompt: the exact "quiet confident wrong" failure the fix removes.
-Assert ($jobBody -notmatch '\$p\b\s*(=|\+=)') "the job scriptblock must never assign to the prompt parameter - a rewrite there truncates the prompt while every other check here stays green"
+Assert ($jobBodyCode -notmatch '\$p\b\s*(=|\+=)') "the job scriptblock must never assign to the prompt parameter - a rewrite there truncates the prompt while every other check here stays green"
 
 # --- Critical 2 fix: the MCP config literal moved out of the invocation line into a separate
 # --- Set-Content -Value string (to dodge a PS 5.1 native-argument quoting bug), and no assertion
@@ -721,11 +814,11 @@ Assert ($chatSrc -notmatch '\(\s*\$script:JarvisChatDisallowedTools') "the disal
 # --- swapping the second and third -ArgumentList entries binds the deny list into $allow. Assert the
 # --- scriptblock never assigns to allow/deny, and assert the param()/-ArgumentList shapes directly.
 Assert ($chatSrc -notmatch '\$(allow|deny)\s*(=|\+=)') "the job scriptblock must never assign to the allow or deny parameter - a rebind there would widen the effective tool set while every other check in this guard stays green"
-Assert ($chatSrcNoComments -match 'param\(\s*\$p\s*,\s*\$allow\s*,\s*\$deny\s*,\s*\$dir\s*,\s*\$tok\s*,\s*\$cfgPath\s*,\s*\$pidFile\s*\)') "the job scriptblock's param() must bind p, allow, deny, dir, tok, cfgPath, pidFile in that exact order"
+Assert ($chatSrcCodeOnly -match 'param\(\s*\$p\s*,\s*\$allow\s*,\s*\$deny\s*,\s*\$dir\s*,\s*\$tok\s*,\s*\$cfgPath\s*,\s*\$pidFile\s*\)') "the job scriptblock's param() must bind p, allow, deny, dir, tok, cfgPath, pidFile in that exact order"
 # END-ANCHORED on purpose: the un-anchored form silently passed when an 8th argument was appended, so
 # a new entry could enter the job completely unscrutinised while this assertion reported the argument
 # binding as verified. The list must match the param() tuple above exactly - no more, no fewer.
-Assert ($chatSrcNoComments -match '-ArgumentList\s+\$Prompt,\s*\$script:JarvisChatAllowedTools,\s*\$script:JarvisChatDisallowedTools,\s*\$ScopeDir,\s*\$tok,\s*\$cfgPath,\s*\$pidFile\s*(\r?\n|$)') "-ArgumentList must bind EXACTLY Prompt, AllowedTools, DisallowedTools, ScopeDir, tok, cfgPath, pidFile in that order and nothing more - swapping allow and deny here would bind the deny list into allow with no assignment and no concatenation anywhere, and an appended argument would enter the job unscrutinised"
+Assert ($chatSrcCodeOnly -match '-ArgumentList\s+\$Prompt,\s*\$script:JarvisChatAllowedTools,\s*\$script:JarvisChatDisallowedTools,\s*\$ScopeDir,\s*\$tok,\s*\$cfgPath,\s*\$pidFile\s*(\r?\n|$)') "-ArgumentList must bind EXACTLY Prompt, AllowedTools, DisallowedTools, ScopeDir, tok, cfgPath, pidFile in that order and nothing more - swapping allow and deny here would bind the deny list into allow with no assignment and no concatenation anywhere, and an appended argument would enter the job unscrutinised"
 
 # flags that make the allowlist moot entirely must never appear, in any documented spelling (catches 3)
 foreach ($bad in @('--dangerously-skip-permissions', '--allow-dangerously-skip-permissions', '--permission-mode')) {
@@ -775,15 +868,25 @@ Assert ($claudeInvocations -eq 1) "exactly one mention of the claude binary in t
 # prompt), the post-flight (the reply carries it back), and the strip (it never reaches Alex or the
 # log). Behavioural coverage for all three is in the fidelity section at the bottom of this file.
 Assert ($chatSrcNoComments -match "if\s*\(\`$Receipt\s+-notmatch\s+'\^\[0-9a-f\]\{16\}\$'\)\s*\{\s*return\s*\`$null\s*\}") 'Invoke-ChatTurn must validate -Receipt by hand and return $null - a Mandatory parameter would raise a ParameterBindingException in the non-interactive poller host, breaking the never-throw contract'
-Assert ($chatSrcNoComments -match '\$rFirst\s*-lt\s*0\s*-or\s*\$rFirst\s*-ne\s*\$rLast') 'the receipt must be PRESENT and UNIQUE in the outgoing prompt - a duplicate earlier in the prompt survives tail truncation, which is exactly why the fence nonce cannot serve as the receipt'
-Assert ($chatSrcNoComments -match '\$Prompt\.Substring\(\$rLast\s*\+\s*\$Receipt\.Length\)\.Trim\(\)') 'the receipt must be the LAST thing in the outgoing prompt - if anything may follow it, losing the tail and losing the receipt stop being the same event'
-Assert ($chatSrcNoComments -match '\$out\.IndexOf\(\$Receipt,\s*\[StringComparison\]::Ordinal\)\s*-lt\s*0\s*\)\s*\{\s*return\s*\$script:JarvisChatUnverifiedReply\s*\}') 'a reply that does not carry the receipt back must return the refusal constant - never the model text, and never the silent $null that would read to Alex as an ordinary outage'
-Assert ($chatSrcNoComments -match '\$out\s*=\s*\$out\.Replace\(\$Receipt,\s*''''\)') 'the receipt must be STRIPPED from the verified reply: it must reach neither the phone nor the chat log, since the log returns as history on the next turn'
+Assert ($chatSrcCodeOnly -match '\$rFirst\s*-lt\s*0\s*-or\s*\$rFirst\s*-ne\s*\$rLast') 'the receipt must be PRESENT and UNIQUE in the outgoing prompt - a duplicate earlier in the prompt survives tail truncation, which is exactly why the fence nonce cannot serve as the receipt'
+Assert ($chatSrcCodeOnly -match '\$Prompt\.Substring\(\$rLast\s*\+\s*\$Receipt\.Length\)\.Trim\(\)') 'the receipt must be the LAST thing in the outgoing prompt - if anything may follow it, losing the tail and losing the receipt stop being the same event'
+# --- Case-sensitivity fix (2026-07-20): this pinned [StringComparison]::Ordinal, which was a live
+# --- FALSE POSITIVE rather than a security property. The receipt is 16 hex characters, so comparing
+# --- OrdinalIgnoreCase costs exactly zero of its 64 bits - there is no second token an uppercased copy
+# --- could collide with - while Ordinal threw away any good turn whose reply happened to uppercase the
+# --- token. Every other comparison of this token was ALREADY case-insensitive (Build-ChatPrompt strips
+# --- it from the untrusted inputs with -replace, and ValidatePattern is case-insensitive on both
+# --- -Nonce and -Receipt), so Ordinal here was the outlier, not the strict one. The check and the
+# --- strip must move TOGETHER: a check that accepts an uppercased token and a strip that cannot remove
+# --- one would send the receipt to Alex's phone and into the chat log, which is the one place it must
+# --- never reach. Both are pinned to IgnoreCase below for that reason.
+Assert ($chatSrcCodeOnly -match '\$out\.IndexOf\(\$Receipt,\s*\[StringComparison\]::OrdinalIgnoreCase\)\s*-lt\s*0\s*\)\s*\{\s*return\s*\$script:JarvisChatUnverifiedReply\s*\}') 'a reply that does not carry the receipt back must return the refusal constant - never the model text, and never the silent $null that would read to Alex as an ordinary outage. The comparison must be OrdinalIgnoreCase: the token is hex, so case-folding loses none of its 64 bits, and Ordinal took good turns down whenever the model uppercased it'
+Assert ($chatSrcCodeOnly -match '\[regex\]::Replace\(\$out,\s*\[regex\]::Escape\(\$Receipt\),[^)]*\[System\.Text\.RegularExpressions\.RegexOptions\]::IgnoreCase\)') 'the receipt must be STRIPPED from the verified reply CASE-INSENSITIVELY, matching the check above: it must reach neither the phone nor the chat log, since the log returns as history on the next turn. String.Replace is ordinal-only and would leave an uppercased token in a reply the check just accepted'
 # ordering: the token is removed only AFTER it has been checked for. Swapping these two makes the
 # check unconditionally true (the token is always absent by then) - fail-open, with the strip still
 # present and this whole section otherwise green.
-$receiptCheckIdx = $chatSrcNoComments.IndexOf('$out.IndexOf($Receipt, [StringComparison]::Ordinal) -lt 0')
-$receiptStripIdx = $chatSrcNoComments.IndexOf('$out = $out.Replace($Receipt,')
+$receiptCheckIdx = $chatSrcCodeOnly.IndexOf('$out.IndexOf($Receipt, [StringComparison]::OrdinalIgnoreCase) -lt 0')
+$receiptStripIdx = $chatSrcCodeOnly.IndexOf('$out = [regex]::Replace($out, [regex]::Escape($Receipt)')
 Assert ($receiptCheckIdx -ge 0 -and $receiptStripIdx -gt $receiptCheckIdx) 'the receipt must be CHECKED before it is stripped - stripping first makes the check trivially false and the gate fail-open'
 # and the refusal text must be a fixed constant that says what actually happened
 Assert ($JarvisChatUnverifiedReply -match '(?i)could not confirm') "the refusal line must say plainly that delivery could not be confirmed, got '$JarvisChatUnverifiedReply'"
@@ -797,7 +900,7 @@ Assert ($JarvisChatUnverifiedReply -notmatch [char]0x2014) "the refusal line mus
 # inherited OAuth token past the very timeout the kill exists to enforce. Measured on master: job
 # state Completed, pid file absent, claude reached. Both halves of the fix are pinned.
 Assert ($chatSrcNoComments -match "Set-Content\s+-LiteralPath\s+\`$pidFile\s+-Value\s+'pending'\s+-ErrorAction\s+Stop") 'the parent must PROBE-WRITE the pid file before starting the job, so a broken $env:TEMP fails the turn closed instead of disarming the tree kill'
-Assert ($chatSrcNoComments -match 'Set-Content\s+-LiteralPath\s+\$pidFile\s+-Value\s+\$PID\s+-ErrorAction\s+Stop') "the job's pid write must use -ErrorAction Stop: non-terminating, it let the job proceed to start claude with no PID recorded, leaving an unkillable orphan holding the OAuth token"
+Assert ($chatSrcCodeOnly -match 'Set-Content\s+-LiteralPath\s+\$pidFile\s+-Value\s+\$PID\s+-ErrorAction\s+Stop') "the job's pid write must use -ErrorAction Stop: non-terminating, it let the job proceed to start claude with no PID recorded, leaving an unkillable orphan holding the OAuth token"
 # the sentinel must not be digits, or a half-set-up turn would be fed to taskkill as a real PID
 Assert ($chatSrcNoComments -notmatch "\`$pidFile\s+-Value\s+'\d+'") "the pid-file probe sentinel must not be numeric - it would satisfy the '^\s*(\d+)\s*\$' match on the timeout path and send a bogus PID to taskkill /T /F"
 
@@ -1037,7 +1140,13 @@ $so = [Console]::OpenStandardOutput()
 $txt = [Text.Encoding]::UTF8.GetString($b)
 if ($env:JARVIS_CHAT_TEST_RECEIPT -and -not $env:JARVIS_CHAT_TEST_NOATTEST) {
   if ($txt.Contains($env:JARVIS_CHAT_TEST_RECEIPT)) {
-    $tb = (New-Object System.Text.UTF8Encoding($false)).GetBytes($env:JARVIS_CHAT_TEST_RECEIPT + "`n")
+    # JARVIS_CHAT_TEST_UPPERRECEIPT models a real, harmless model habit: echoing the token back
+    # UPPERCASED. The child still had to SEE the exact token to get here (the Contains check above is
+    # on the received bytes, unchanged), so this is an honest attestation in different letter case -
+    # not a forgery. The token is hex, so nothing about its 64 bits depends on case.
+    $echoTok = $env:JARVIS_CHAT_TEST_RECEIPT
+    if ($env:JARVIS_CHAT_TEST_UPPERRECEIPT) { $echoTok = $echoTok.ToUpperInvariant() }
+    $tb = (New-Object System.Text.UTF8Encoding($false)).GetBytes($echoTok + "`n")
     $so.Write($tb, 0, $tb.Length)
   }
 }
@@ -1180,6 +1289,51 @@ try {
     return ,$out.ToArray()
   }
 
+  # --- THE LOCKDOWN, AS THE CHILD ACTUALLY RECEIVED IT -------------------------------------------
+  # BLOCKER 1. Every lockdown assertion in the structural guard above validates the ARRAY $claudeArgs
+  # or the $JarvisChat* constants. The child receives neither: telegram-chat.ps1 joins that array into
+  # ONE string on $psi.Arguments, and nothing bound the two together. So the array was free to stay a
+  # decoy while the real command line was rewritten underneath it. Confirmed at the wire via CIM:
+  # appending
+  #   .Replace('"Read Glob Grep"','"Read Glob Grep Bash"')
+  # to the $psi.Arguments line shipped with 'telegram-chat: ALL PASS' while the child was handed Bash;
+  # appending .Replace('"--strict-mcp-config" ','') restored MCP servers, and with them the outbound
+  # channel, dissolving the security argument in DESIGN-TELEGRAM-CHAT section 2 outright.
+  #
+  # These assertions therefore read the RECORDED WIRE - the command line the child process was really
+  # given, captured from the parent cmd.exe via CIM - and no source rewrite can walk past them, because
+  # there is no source text involved. Quotes are stripped before matching so the check is independent
+  # of HOW the tokens happen to be quoted, and the flags are required ADJACENT to their values in one
+  # unbroken run: that is what makes the value itself load-bearing rather than merely the flag's
+  # presence. 'Read Glob Grep Bash' fails because the token after 'Grep' is then 'Bash' and not
+  # '--disallowedTools'.
+  $wireAllow  = 'Read Glob Grep'
+  $wireDeny   = 'Bash Write Edit WebFetch WebSearch'
+  $wireScope  = (Resolve-Path -LiteralPath $fidScope).ProviderPath
+  $wireLockdown = '--allowedTools\s+' + [regex]::Escape($wireAllow) +
+                  '\s+--disallowedTools\s+' + [regex]::Escape($wireDeny) +
+                  '\s+--add-dir\s+' + [regex]::Escape($wireScope) +
+                  '\s+--strict-mcp-config\s+--mcp-config\s+\S+\s+--model\b'
+  function Assert-WireLockdown {
+    # One recorded argv, checked against the lockdown the design argument depends on.
+    param([string]$Argv, [string]$Label)
+    $bare = $Argv -replace '"', ''
+    # (1) the whole lockdown run, adjacent, in order - value included
+    Assert ($bare -match $wireLockdown) "$Label THE LOCKDOWN DID NOT REACH THE CHILD. The command line the child process actually received does not carry --allowedTools '$wireAllow' --disallowedTools '$wireDeny' --add-dir '$wireScope' --strict-mcp-config --mcp-config <file> as one unbroken run. Whatever the source array says, THIS is what the agent was granted. Got: '$bare'"
+    # (2) exactly once each: a second, wider copy of any of these could win the CLI's own argument
+    # parse while the first one satisfied the match above
+    foreach ($flag in @('--allowedTools', '--disallowedTools', '--add-dir', '--strict-mcp-config', '--mcp-config')) {
+      $n = ([regex]::Matches($bare, [regex]::Escape($flag) + '(?![-\w])')).Count
+      Assert ($n -eq 1) "$Label $flag appears $n time(s) on the command line the child received, expected exactly 1 - a second copy can win the argument parse while the first satisfies every adjacency check"
+    }
+    # (3) and nothing that makes the allowlist moot, in any documented spelling. Checked on the WIRE
+    # rather than in the source, because the source check cannot see a flag appended to the joined
+    # string after the array was built.
+    foreach ($bad in @('--dangerously-skip-permissions', '--allow-dangerously-skip-permissions', '--permission-mode', '--allowed-tools', '--disallowed-tools')) {
+      Assert ($bare -notmatch [regex]::Escape($bad)) "$Label '$bad' reached the child's command line, which makes the allowlist above meaningless. Got: '$bare'"
+    }
+  }
+
   $fidSw = [System.Diagnostics.Stopwatch]::StartNew()
   foreach ($entry in $corpus) {
     Remove-Item $stdinCap -Force -ErrorAction SilentlyContinue
@@ -1237,6 +1391,9 @@ try {
       # are on the real invocation proves the recorder is looking at the actual command line. Applied
       # PER RECORD, it is also what catches a decoy that carries none of the lockdown flags.
       Assert ($gotArgv.Contains('--output-format') -and $gotArgv.Contains('--allowedTools')) "prompt fidelity [$($entry.Name)] argv record $ri/$($argvRecords.Count): this recorded argv is not the real claude invocation, so its absence checks prove nothing - and an invocation without the lockdown flags is itself the regression. Got: '$gotArgv'"
+      # ...and the positive control is no longer just "some flags were present". The full lockdown,
+      # values and all, must be on the line the child actually received (BLOCKER 1 above).
+      Assert-WireLockdown -Argv $gotArgv -Label "prompt fidelity [$($entry.Name)] argv record $ri/$($argvRecords.Count):"
       # (a) the marker: present in what was delivered, absent from the command line.
       Assert (-not $gotArgv.Contains($promptMarker)) "prompt fidelity [$($entry.Name)] argv record $ri/$($argvRecords.Count): THE PROMPT IS ON THE COMMAND LINE. claude prefers a positional prompt over stdin, so it reads the argv copy - which PS 5.1 has already shredded and truncated - and the silent-truncation bug is back. Got argv: '$gotArgv'"
       # (b) zero characters of the prompt: no 40-character window of what was sent may appear in argv.
@@ -1351,6 +1508,35 @@ try {
   Assert ($naReply -eq $JarvisChatUnverifiedReply) "RECEIPT GATE MUST FAIL CLOSED AND LOUD: the child read every byte to EOF (so all four delivery gates passed) and replied without the receipt token, and Invoke-ChatTurn returned '$naReply' instead of the refusal line. This is the case no writer-side observation can ever see - a child that reads the whole prompt and answers from a prefix - and the receipt is the only thing standing in front of it"
   Assert ($naReply -notmatch 'REPLY-SENTINEL') "receipt gate: the model's own text must NEVER reach Alex on an unverified turn - the refusal is a fixed constant, not anything derived from the reply"
 
+  # --- ...AND THE OTHER DIRECTION: AN UPPERCASED RECEIPT IS THE SAME RECEIPT ---------------------
+  # The false-positive direction, and it was live. The reply check compared with
+  # [StringComparison]::Ordinal, so a model that echoed the token back uppercased - an ordinary habit,
+  # and one nothing in the persona forbids - had a perfectly good answer discarded and Alex told to ask
+  # again. Nothing was gained for it: the token is 16 hex characters, so folding case costs exactly
+  # zero of its 64 bits, and every OTHER comparison of it (Build-ChatPrompt's -replace stripping, the
+  # ValidatePattern on -Nonce and -Receipt) was already case-insensitive. This child reads the whole
+  # prompt and attests honestly, in capitals.
+  Remove-Item $stdinCap -Force -ErrorAction SilentlyContinue
+  Remove-Item $argvCap  -Force -ErrorAction SilentlyContinue
+  # a token with no letter in it would make the uppercasing a no-op and this test vacuous (about 1 run
+  # in 4400), so draw until there is at least one a-f to change case
+  $ucReceipt = New-ChatNonce
+  while ($ucReceipt -notmatch '[a-f]') { $ucReceipt = New-ChatNonce }
+  $env:JARVIS_CHAT_TEST_RECEIPT      = $ucReceipt
+  $env:JARVIS_CHAT_TEST_UPPERRECEIPT = '1'
+  $ucPrompt = 'A second perfectly ordinary question, Sir.' + "`n" + $ucReceipt
+  $ucReply  = Invoke-ChatTurn -Prompt $ucPrompt -ScopeDir $fidScope -Receipt $ucReceipt -TimeoutSec 120
+  Remove-Item Env:\JARVIS_CHAT_TEST_UPPERRECEIPT -ErrorAction SilentlyContinue
+  $ucRecords = Get-StdinRecords $stdinCap
+  Assert ($ucRecords.Count -eq 1) "uppercase receipt: the shim must have been invoked exactly once, got $($ucRecords.Count)"
+  Assert (([Text.Encoding]::UTF8.GetString($ucRecords[0])).Contains($ucReceipt)) "uppercase receipt: the child must have received the whole prompt including the receipt, or this is testing a delivery failure instead"
+  Assert ($ucReply -ne $JarvisChatUnverifiedReply) "AN UPPERCASED RECEIPT MUST NOT TRIP THE GATE: the child read the whole prompt and echoed the token back in capitals, and Invoke-ChatTurn refused the turn. The token is hex - case folding loses none of its 64 bits - so this is a false positive that throws away good answers, not a security property"
+  Assert ($ucReply -eq 'REPLY-SENTINEL') "uppercase receipt: the verified reply must come back intact, got '$ucReply'"
+  # ...and it must still be STRIPPED. A check that accepts an uppercased token and a strip that cannot
+  # remove one would put the receipt on Alex's phone and into the chat log, which is replayed as
+  # history on the next turn - exactly what the strip exists to prevent.
+  Assert ($ucReply.IndexOf($ucReceipt, [System.StringComparison]::OrdinalIgnoreCase) -lt 0) "uppercase receipt: the token must be stripped from the reply in EITHER case - String.Replace is ordinal-only, so a check widened to IgnoreCase without widening the strip leaks the receipt to the phone and the log. Got '$ucReply'"
+
   # --- ...and the same detector must NOT fire on a SLOW but complete reader ----------------------
   # The failure direction that matters second: a delivery check that cannot tell "stalled mid-prompt"
   # from "gave up mid-prompt" would fail closed on every slow turn and take the chat surface down.
@@ -1447,7 +1633,7 @@ try {
   }
 } finally {
   $env:PATH = $fidPathSaved
-  Remove-Item Env:\JARVIS_CHAT_TEST_STDIN, Env:\JARVIS_CHAT_TEST_ARGV, Env:\JARVIS_CHAT_TEST_MODE, Env:\JARVIS_CHAT_TEST_EXIT, Env:\JARVIS_CHAT_TEST_READBYTES, Env:\JARVIS_CHAT_TEST_LAZY, Env:\JARVIS_CHAT_TEST_UTF8REPLY, Env:\JARVIS_CHAT_TEST_RECEIPT, Env:\JARVIS_CHAT_TEST_NOATTEST -ErrorAction SilentlyContinue
+  Remove-Item Env:\JARVIS_CHAT_TEST_STDIN, Env:\JARVIS_CHAT_TEST_ARGV, Env:\JARVIS_CHAT_TEST_MODE, Env:\JARVIS_CHAT_TEST_EXIT, Env:\JARVIS_CHAT_TEST_READBYTES, Env:\JARVIS_CHAT_TEST_LAZY, Env:\JARVIS_CHAT_TEST_UTF8REPLY, Env:\JARVIS_CHAT_TEST_RECEIPT, Env:\JARVIS_CHAT_TEST_NOATTEST, Env:\JARVIS_CHAT_TEST_UPPERRECEIPT -ErrorAction SilentlyContinue
   Remove-Item $fidDir -Recurse -Force -ErrorAction SilentlyContinue
   if ($fidTokCreated) { Remove-Item $fidTok -Force -ErrorAction SilentlyContinue }
 }
