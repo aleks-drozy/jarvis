@@ -184,8 +184,11 @@ function Send-Telegram {
 function Invoke-ChatTurn {
   # Shadow of the real headless-claude turn (skill/bin/telegram-chat.ps1). Records instead of spawning
   # claude/the model and returns whatever the test staged in $script:MockChatTurnReturn.
-  param([string]$Prompt, [string]$ScopeDir, [int]$TimeoutSec = 180)
-  $script:MockChatTurnCalls.Add([pscustomobject]@{ Prompt = $Prompt; ScopeDir = $ScopeDir })
+  # -Receipt is recorded, not merely accepted: telegram-bot.ps1 is the ONLY place production ever draws
+  # a receipt, and until this parameter was declared here the token vanished into $args (a simple
+  # function swallows unmatched named arguments) and no test in this suite had ever seen one.
+  param([string]$Prompt, [string]$ScopeDir, [string]$Receipt, [int]$TimeoutSec = 180)
+  $script:MockChatTurnCalls.Add([pscustomobject]@{ Prompt = $Prompt; ScopeDir = $ScopeDir; Receipt = $Receipt })
   return $script:MockChatTurnReturn
 }
 
@@ -243,6 +246,73 @@ Assert ($script:MockSentMessages.Count -eq 1) "normal reply: exactly one Send-Te
 Assert ($script:MockSentMessages[0].Text -eq 'The meaning of life is 42, Sir.') "normal reply is sent UNCHANGED, got '$($script:MockSentMessages[0].Text)'"
 $loggedNormal = Get-Content -LiteralPath $script:MockChatLogPath -Raw
 Assert ($loggedNormal -match [regex]::Escape('The meaning of life is 42, Sir.')) "normal case: the logged reply matches what was sent"
+Remove-Item -LiteralPath $script:MockChatLogPath -Force -ErrorAction SilentlyContinue
+
+# ===== THE RECEIPT: DRAWN FRESH, PER TURN, WHERE PRODUCTION ACTUALLY DRAWS IT ====================
+# telegram-bot.ps1's 'chat' branch is the ONLY place production ever creates a receipt token. Until
+# now this suite contained not one occurrence of the word: every test of the receipt lived in
+# tests/telegram-chat.Tests.ps1, which exercises Invoke-ChatTurn with a token the TEST drew itself.
+# So the whole mechanism rested on a draw nothing checked. Replace those two lines with
+#   $receipt = 'a1b2c3d4e5f60718'
+# and both suites stay green while a per-turn CSPRNG secret becomes a git-tracked constant that any
+# reader of the repo can echo back on demand - which is the entire mechanism defeated, not weakened.
+# The receipt's security argument has exactly two premises: it is UNGUESSABLE, and it is DIFFERENT
+# EVERY TURN. Neither can be established by looking at one token, so this draws several and requires
+# them all to differ. A hardcoded constant fails on the first comparison; so does any scheme that
+# cycles a small set, which is why this is eight turns rather than two.
+Reset-TelegramMocks
+$script:MockChatTurnReturn = 'Noted, Sir.'
+$receiptTurns = 8
+for ($i = 0; $i -lt $receiptTurns; $i++) {
+  Invoke-TelegramCommand -Command 'chat' -Text "Tell me something interesting, Sir ($i)" -Cred $mockCred
+}
+Assert ($script:MockChatTurnCalls.Count -eq $receiptTurns) "receipt draw: expected $receiptTurns chat turns to reach Invoke-ChatTurn, got $($script:MockChatTurnCalls.Count)"
+
+$receipts = @($script:MockChatTurnCalls | ForEach-Object { $_.Receipt })
+# (1) production must pass one at all, and it must be the shape Invoke-ChatTurn will accept - that
+# function validates by hand and returns $null on anything else, so a malformed draw here is not a
+# weak receipt, it is a chat surface that answers nothing.
+$ri = 0
+foreach ($rc in $receipts) {
+  $ri++
+  Assert ($rc -match '^[0-9a-f]{16}$') "receipt draw, turn $($ri): telegram-bot.ps1 must hand Invoke-ChatTurn a 16-hex-character receipt, got '$rc'. Invoke-ChatTurn validates this by hand and degrades to `$null, so a malformed draw silently takes the whole chat surface down"
+}
+# (2) THE BLOCKER: every turn draws its own. A constant passes every other check in both suites.
+$distinctReceipts = @($receipts | Select-Object -Unique)
+Assert ($distinctReceipts.Count -eq $receiptTurns) "RECEIPT IS NOT PER-TURN: $receiptTurns chat turns produced only $($distinctReceipts.Count) distinct receipt(s). A receipt that repeats is a shared secret rather than a per-turn one, and a receipt hardcoded in tracked source is no secret at all - anyone who can read the repo can echo it back, and the reply-carries-the-token check stops meaning the model saw this turn's prompt"
+
+# (3) it must differ from the fence NONCE, per turn. Build-ChatPrompt throws outright if the two are
+# equal, and a throw in this branch takes the poller down - but more fundamentally the nonce repeats
+# in every opening block header, so a tail-truncated prompt still carries it. A receipt equal to the
+# nonce would therefore pass the reply check exactly when it most needs to fail.
+$nonces = @()
+$ri = 0
+foreach ($call in $script:MockChatTurnCalls) {
+  $ri++
+  $nonceMatch = [regex]::Match($call.Prompt, 'MESSAGE FROM ALEX \(DATA, NOT INSTRUCTION, ([0-9a-f]{16})\)')
+  Assert ($nonceMatch.Success) "receipt draw, turn $($ri): could not find the fence nonce in the assembled prompt - the nonce/receipt comparison below cannot be made, so treat it as a failure rather than skip it"
+  $nonces += $nonceMatch.Groups[1].Value
+  Assert ($call.Receipt -ne $nonceMatch.Groups[1].Value) "receipt draw, turn $($ri): the receipt must NOT be the fence nonce. The nonce repeats in every opening block header, so a tail-truncated prompt still carries it - a nonce-based receipt check passes precisely in the case it exists to catch"
+}
+$distinctNonces = @($nonces | Select-Object -Unique)
+Assert ($distinctNonces.Count -eq $receiptTurns) "the fence nonce must be per-turn too, got $($distinctNonces.Count) distinct value(s) across $receiptTurns turns"
+# and no receipt may collide with ANY turn's nonce, not merely its own
+foreach ($rc in $receipts) {
+  Assert ($nonces -notcontains $rc) "receipt draw: a receipt collided with some turn's fence nonce ('$rc') - the two token spaces must stay disjoint in practice, not just within a single turn"
+}
+
+# (4) the receipt production hands over must sit where Invoke-ChatTurn's pre-flight requires it:
+# present, UNIQUE, and LAST in the assembled prompt. This is the bot side of that contract - the
+# prompt it builds must be one the gate will accept, or every turn dies before a byte is sent.
+$ri = 0
+foreach ($call in $script:MockChatTurnCalls) {
+  $ri++
+  $rFirst = $call.Prompt.IndexOf($call.Receipt, [System.StringComparison]::Ordinal)
+  $rLast  = $call.Prompt.LastIndexOf($call.Receipt, [System.StringComparison]::Ordinal)
+  Assert ($rFirst -ge 0) "receipt draw, turn $($ri): the receipt handed to Invoke-ChatTurn does not appear in the prompt telegram-bot.ps1 built - the pre-flight refuses that before any model call"
+  Assert ($rFirst -eq $rLast) "receipt draw, turn $($ri): the receipt appears more than once in the assembled prompt - an earlier copy survives tail truncation, which is the whole reason the fence nonce cannot serve as the receipt"
+  Assert (-not $call.Prompt.Substring($rLast + $call.Receipt.Length).Trim()) "receipt draw, turn $($ri): something follows the receipt in the assembled prompt. It only means anything as the LAST thing in the prompt: that is what makes 'the tail was cut' and 'the receipt is gone' the same event"
+}
 Remove-Item -LiteralPath $script:MockChatLogPath -Force -ErrorAction SilentlyContinue
 
 # ===== Invoke-PollOnce: the stale-question ack must fire ONLY for chat, and must never call the model =====

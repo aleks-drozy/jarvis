@@ -425,6 +425,38 @@ function Test-ChatScopeNarrow {
   return $true
 }
 
+function Test-ChatDelivery {
+  # THE DELIVERY GATE, as a function of the job's own result object. Returns $true only when the child
+  # can be shown to have read the WHOLE prompt and exited cleanly; $false refuses the turn.
+  #
+  # This lives in a named function rather than inline in Invoke-ChatTurn for one reason: TESTABILITY.
+  # Inline, each gate could only ever be pinned by a regex over this file's source text, and a
+  # source-text pin is satisfiable by any edit that keeps the characters and loses the behaviour - the
+  # exact class of decoy that let the original truncation defect survive eleven review rounds. As a
+  # function it takes a synthesised result object, so tests/telegram-chat.Tests.ps1 can flip ONE field
+  # at a time and require a refusal for each. Deleting any single line below then fails a test for a
+  # REAL reason (a result that must be refused is accepted) rather than a textual one.
+  #
+  # The gates are not redundant with one another; each was measured to be individually insufficient:
+  #   DeliveryError               - the write itself threw (broken pipe, failed Process.Start).
+  #   Drained                     - WaitForPipeDrain never returned, so the buffer was never emptied.
+  #   ExitedBeforeEof             - the child was already gone when EOF was still unsent, which it
+  #                                 cannot legitimately be: EOF is what ends a stdin-read prompt.
+  #   Delivered -ne PromptBytes   - a short write, as a number. PromptBytes -le 0 is refused too, so an
+  #                                 empty prompt cannot satisfy the equality trivially (0 -eq 0).
+  #   ExitCode                    - a claude run that exited non-zero is a failure, full stop.
+  # Never throws: a missing property on $Result reads as $null, which is falsy, so a malformed result
+  # is refused rather than raising past Invoke-ChatTurn's absolute never-throw contract.
+  param($Result)
+  if ($null -eq $Result) { return $false }
+  if ($Result.DeliveryError) { return $false }
+  if (-not $Result.Drained) { return $false }
+  if ($Result.ExitedBeforeEof) { return $false }
+  if ($Result.PromptBytes -le 0 -or $Result.Delivered -ne $Result.PromptBytes) { return $false }
+  if ($Result.ExitCode -ne 0) { return $false }
+  return $true
+}
+
 function Invoke-ChatTurn {
   # One headless turn. Returns the reply text, or $null if it timed out, failed, or the environment
   # was not ready (missing/corrupt token, missing scope dir) - the caller turns $null into a
@@ -761,15 +793,12 @@ function Invoke-ChatTurn {
     if ($jobState -ne 'Completed') { return $null }
     if (-not $result) { return $null }
     # THE DELIVERY GATE. An exit code of 0 says the child was happy; it says nothing about whether the
-    # child ever read the question. These four checks are what make a short read fail CLOSED instead
-    # of returning a confident answer to a prompt that was never fully delivered. Deleting any one of
-    # them restores the defect described at length in the job above, so tests/telegram-chat.Tests.ps1
-    # pins all four and exercises them with a stand-in child that reads 100 bytes and exits 0.
-    if ($result.DeliveryError) { return $null }
-    if (-not $result.Drained) { return $null }
-    if ($result.ExitedBeforeEof) { return $null }
-    if ($result.PromptBytes -le 0 -or $result.Delivered -ne $result.PromptBytes) { return $null }
-    if ($result.ExitCode -ne 0) { return $null }
+    # child ever read the question. Test-ChatDelivery is what makes a short read fail CLOSED instead of
+    # returning a confident answer to a prompt that was never fully delivered. Deleting any one of the
+    # checks inside it restores the defect described at length in the job above, and each is probed
+    # BEHAVIOURALLY in tests/telegram-chat.Tests.ps1 (one flipped field per gate) rather than only
+    # pinned as source text, which a decoy edit can walk past.
+    if (-not (Test-ChatDelivery $result)) { return $null }
     $out = $result.Output
     if (-not $out -or -not $out.Trim()) { return $null }
     # THE RECEIPT GATE. The four gates above prove the PIPE EMPTIED; this one is the only thing that
@@ -792,11 +821,20 @@ function Invoke-ChatTurn {
     # reads as a specific complaint Alex can report, not as Jarvis being flaky. Stream-json was tried
     # first and rejected for this job; see the task report and DECISIONS.md for why it narrows the gap
     # without closing it.
-    if ($out.IndexOf($Receipt, [StringComparison]::Ordinal) -lt 0) { return $script:JarvisChatUnverifiedReply }
+    # CASE-INSENSITIVELY, and that is not a loosening. The token is 16 hex characters, so matching
+    # OrdinalIgnoreCase costs exactly ZERO of its 64 bits - 'a3f' and 'A3F' are the same 12 bits either
+    # way, and there is no second token an uppercase copy could collide with. What Ordinal cost was a
+    # good turn: a model that echoed the receipt uppercased (or title-cased it mid-sentence) had its
+    # answer thrown away and Alex told to ask again. Every other place this token is compared is
+    # already case-insensitive - Build-ChatPrompt strips it from the untrusted inputs with -replace,
+    # and the ValidatePattern on both -Nonce and -Receipt is case-insensitive too - so Ordinal HERE was
+    # the odd one out rather than the strict one. The strip below matches the same way for the same
+    # reason: a check that accepts an uppercased token must not then leave it in the reply.
+    if ($out.IndexOf($Receipt, [StringComparison]::OrdinalIgnoreCase) -lt 0) { return $script:JarvisChatUnverifiedReply }
     # Verified - now REMOVE it. The token must never reach Alex's phone, and must never reach the chat
     # log either: the log comes back as history on the next turn, which would both teach the model to
     # emit stale tokens and put a receipt somewhere other than the last line of a prompt.
-    $out = $out.Replace($Receipt, '')
+    $out = [regex]::Replace($out, [regex]::Escape($Receipt), '', [System.Text.RegularExpressions.RegexOptions]::IgnoreCase)
     if (-not $out.Trim()) { return $null }
     return $out.Trim()
   } catch {
@@ -805,8 +843,33 @@ function Invoke-ChatTurn {
     # degrade to $null per this function's contract rather than letting it throw into the poller loop.
     return $null
   } finally {
-    if ($cfgPath) { Remove-Item -LiteralPath $cfgPath -Force -ErrorAction SilentlyContinue }
-    if ($pidFile) { Remove-Item -LiteralPath $pidFile -Force -ErrorAction SilentlyContinue }
+    # Per-turn scratch: the MCP config under .jarvis and the pid file under TEMP. These were reported
+    # to survive intermittently (about one pair per 25 successful turns), the plausible cause being a
+    # child - claude, or a helper it spawned - still holding the config open for the moment it takes
+    # the rest of the process tree to go away after WaitForExit returns for the one process we hold a
+    # handle to.
+    # HONEST STATUS: that leak did NOT reproduce here. Measured 2026-07-20 against both this revision
+    # and the unmodified tree: 0 files left after 40 successful turns, and 0 after 8 timeout turns even
+    # with a stand-in child deliberately holding the config open with FileShare.None across the tree
+    # kill. So the retry below is DEFENSIVE, not a confirmed fix for a confirmed symptom, and nobody
+    # should read it as evidence the leak is understood.
+    # It is kept because it is close to free: five attempts, 50ms apart, and only while the file is
+    # actually still there, so the common case (gone on the first try) costs one Test-Path and the
+    # worst case adds 250ms to a turn that already ran for seconds. Neither file carries owner content
+    # anyway - the config is the fixed literal '{"mcpServers":{}}' and the pid file is a number - so
+    # what is at stake is tidiness in the directory that also holds the OAuth token, not exposure.
+    # Wrapped in its own try/catch and SilentlyContinue throughout: this runs in a finally, and a throw
+    # here would escape past the never-throw contract the catch above exists to honour.
+    foreach ($scratch in @($cfgPath, $pidFile)) {
+      if (-not $scratch) { continue }
+      try {
+        for ($attempt = 0; $attempt -lt 5; $attempt++) {
+          if (-not (Test-Path -LiteralPath $scratch -ErrorAction SilentlyContinue)) { break }
+          Remove-Item -LiteralPath $scratch -Force -ErrorAction SilentlyContinue
+          if (Test-Path -LiteralPath $scratch -ErrorAction SilentlyContinue) { Start-Sleep -Milliseconds 50 }
+        }
+      } catch { }
+    }
   }
 }
 
