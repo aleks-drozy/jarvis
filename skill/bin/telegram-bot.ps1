@@ -287,9 +287,17 @@ function Invoke-TelegramCommand {
       $names     = Get-ChatPrefetch -Text $Text
       $collector = Invoke-ChatPrefetch -Names $names -BinDir $BIN
       $nonce     = New-ChatNonce
+      # A SECOND, independent per-turn token: the receipt. It rides on the prompt's last line and the
+      # reply has to carry it back, which is what makes "the model was given the whole message" an
+      # observation rather than an inference from pipe state (see Invoke-ChatTurn's receipt gate).
+      # Drawn separately from the fence nonce and re-drawn on the astronomically unlikely collision,
+      # because Build-ChatPrompt treats the two being equal as a programming error and throws - and a
+      # throw here would take the poller down.
+      $receipt   = New-ChatNonce
+      while ($receipt -eq $nonce) { $receipt = New-ChatNonce }
       $prompt    = Build-ChatPrompt -Message $Text -Persona (Get-ChatPersona) `
-                     -CollectorText $collector -History (Get-ChatHistory -Turns 6) -Nonce $nonce
-      $reply     = Invoke-ChatTurn -Prompt $prompt -ScopeDir $VAULT -TimeoutSec 180
+                     -CollectorText $collector -History (Get-ChatHistory -Turns 6) -Nonce $nonce -Receipt $receipt
+      $reply     = Invoke-ChatTurn -Prompt $prompt -ScopeDir $VAULT -Receipt $receipt -TimeoutSec 180
       if (-not $reply) {
         # Invoke-ChatTurn returns $null for MANY causes - a missing/corrupt token, a non-zero claude
         # exit, empty output, a refused scope, a failed setup write - and only SOMETIMES a timeout.
