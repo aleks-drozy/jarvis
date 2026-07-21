@@ -222,6 +222,18 @@ function Invoke-ChatPrefetch {
         [void]$sb.AppendLine("unavailable: $(Protect-CollectorDelimiter $_.Exception.Message)")
       }
     }
+    # WHAT THIS FEED CANNOT SEE. Learned the hard way on the first live money question (2026-07-21):
+    # asked "how much can I spend this week", Jarvis read the feed's 0.00 current-account balance and
+    # answered "nothing" - while FINANCE.md recorded EUR 500 in savings and a EUR 46/week allowance.
+    # Technically true of the account it can see, materially wrong as an answer, and exactly the
+    # "quiet confident wrong" class this project refuses to ship. The PSD2 AIS feed returns the
+    # BALANCE OF THE LINKED CURRENT ACCOUNT ONLY; Revolut vaults, pots and savings sub-accounts are
+    # structurally invisible to it (already documented in PHASE3-BANK.md, and the same trap caught a
+    # human reconciliation on 2026-07-19). The recorded figures live in FINANCE.md, which is inside
+    # the read scope - so say so here rather than hoping the model infers it.
+    [void]$sb.AppendLine('## collector: bank-scope-note')
+    [void]$sb.AppendLine('The figures above are the LINKED CURRENT ACCOUNT ONLY. This feed cannot see Revolut vaults, pots or savings sub-accounts, so a low or zero balance here does NOT mean Alex has no money.')
+    [void]$sb.AppendLine('Before answering any question about what he can spend, save or afford, READ FINANCE.md in your notes directory: it holds the recorded savings, the monthly budget and the weekly allowance, and those are the figures that answer the question. Cite both, and say which came from the live feed and which from FINANCE.md.')
   }
   return $sb.ToString()
 }

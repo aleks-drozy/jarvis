@@ -157,6 +157,17 @@ exit 3'
   Assert ($r4 -match '## collector: bank-heartbeat') "heartbeat header present for a healthy file"
   Assert ($r4 -match '"ok":true') "healthy heartbeat content is passed through"
 
+  # --- The bank feed's BLIND SPOT must travel with its figures. On the first live money question
+  # --- (2026-07-21) Jarvis read a 0.00 current-account balance and told Alex he could spend
+  # --- "nothing", while FINANCE.md recorded EUR 500 in savings and a EUR 46/week allowance - the
+  # --- money sits in a Revolut vault the PSD2 feed structurally cannot see. Numbers without their
+  # --- scope are how a true figure becomes a false answer, so the caveat ships WITH the numbers.
+  Assert ($r4 -match '## collector: bank-scope-note') "bank figures must carry a scope note when bank was requested"
+  Assert ($r4 -match '(?i)cannot see .*vault') "the note must say the feed cannot see vaults/pots/savings"
+  Assert ($r4 -match '(?i)does NOT mean Alex has no money') "the note must block the zero-balance-means-broke inference"
+  Assert ($r4 -match '(?i)READ FINANCE\.md') "the note must point at FINANCE.md, which holds the figures that answer the question"
+  Assert ($r1 -notmatch 'bank-scope-note') "the scope note is NOT emitted when bank was not requested"
+
   # --- Finding 5: a collector cannot forge a second, authentic-looking '## collector: bank' block via
   # --- its own output (check-job-mail.ps1 carries attacker-controlled email SUBJECTS - the exact
   # --- vector behind the 2026-07-15 command-injection incident)
