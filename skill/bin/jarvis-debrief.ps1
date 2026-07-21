@@ -27,10 +27,20 @@ function Toast($msg) {
 function Get-DebriefChannel {
   # where to deliver the finished debrief: telegram | email | both. Reads CONFIG.md; defaults to email
   # (back-compat) if the key is absent or unreadable.
+  #
+  # Fix 3: this used to match '(telegram|email|both)\b' and return the CAPTURED WORD, so a hand-edited
+  # 'debrief_delivery: telegram-only' matched 'telegram' (a hyphen is a non-word character, so \b is
+  # satisfied) and was silently accepted as a valid setting. Same defect as Test-ChatEnabled in
+  # telegram-chat.ps1, which the two were copied from each other. Read the WHOLE value and accept it
+  # only if it is exactly one of the three; anything else falls back to the documented default. The
+  # behaviour for the three VALID values is unchanged.
   try {
     $m = [regex]::Match((Get-Content (Join-Path $vault 'CONFIG.md') -Raw),
-      '(?m)^\s*-?\s*debrief_delivery:\s*(telegram|email|both)\b')
-    if ($m.Success) { return $m.Groups[1].Value.ToLower() }
+      '(?m)^\s*-?\s*debrief_delivery:[ \t]*([^\r\n]*)')
+    if ($m.Success) {
+      $v = $m.Groups[1].Value.Trim().ToLower()
+      if ($v -eq 'telegram' -or $v -eq 'email' -or $v -eq 'both') { return $v }
+    }
   } catch { }
   return 'email'
 }
