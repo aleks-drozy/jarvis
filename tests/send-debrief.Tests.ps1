@@ -81,6 +81,14 @@ try {
   Set-Content -Encoding UTF8 (Join-Path $vault 'CONFIG.md') "- modules:`n  debrief_delivery: Telegram  "
   Assert ((Get-DebriefChannel) -eq 'telegram') "casing and trailing whitespace must still resolve to a valid channel"
 
+  # ...and a TRAILING COMMENT, which is this file's convention on every key and was a live regression:
+  # the real line reads 'debrief_delivery: telegram       # where the 08:30 debrief lands: ...', which
+  # the whole-line read captured verbatim, matched against none of the three, and silently fell back
+  # to 'email' - rerouting the morning briefing off Alex's phone. Verbatim shape pinned here so it
+  # cannot recur.
+  Set-Content -Encoding UTF8 (Join-Path $vault 'CONFIG.md') "- modules:`n  debrief_delivery: telegram       # where the 08:30 debrief lands: telegram | email | both"
+  Assert ((Get-DebriefChannel) -eq 'telegram') "a trailing '# comment' is the file's own convention and must not disable a valid channel"
+
   # malformed values fall back to the default instead of matching on a prefix
   foreach ($bad in @('telegram-only','email-digest','both-ways','telegram and email','tele','none','')) {
     Set-Content -Encoding UTF8 (Join-Path $vault 'CONFIG.md') "- modules:`n  debrief_delivery: $bad"

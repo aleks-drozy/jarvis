@@ -29,12 +29,24 @@ function Test-ChatEnabled {
   # a kill switch: a value its author clearly did not mean as "enabled" must never enable. Read the
   # WHOLE value instead and require it to be exactly 'on' - 'on-demand', 'on x', 'ON!' and every other
   # near miss now fall through to disabled, along with the absent and unreadable cases.
+  #
+  # ...but reading the whole line went one step too far, and it cost a live regression the day it
+  # shipped: EVERY key in CONFIG.md's modules block carries a trailing '# comment' - that is the
+  # file's own documented convention - so 'telegram_chat: on   # enabled for the smoke test' captured
+  # 'on   # enabled...' and read as DISABLED. The sibling Get-DebriefChannel had the same defect and
+  # silently sent the 08:30 debrief to email instead of Telegram. So: strip a trailing comment first,
+  # THEN require an exact match. A '#' genuinely opens a comment in this file, while the near misses
+  # the exact-match rule exists to reject ('on-demand', 'on demand', 'ON!') contain no '#' and are
+  # still rejected. Both properties hold at once.
   param([string]$VaultPath)
   try {
     $cfgFile = Join-Path $VaultPath 'CONFIG.md'
     if (-not (Test-Path $cfgFile)) { return $false }
     $m = [regex]::Match((Get-Content -LiteralPath $cfgFile -Raw), '(?m)^\s*-?\s*telegram_chat:[ \t]*([^\r\n]*)')
-    if ($m.Success) { return ($m.Groups[1].Value.Trim().ToLower() -eq 'on') }
+    if ($m.Success) {
+      $v = ($m.Groups[1].Value -replace '#.*$', '').Trim().ToLower()
+      return ($v -eq 'on')
+    }
   } catch { }
   return $false
 }

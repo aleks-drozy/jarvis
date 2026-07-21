@@ -34,11 +34,18 @@ function Get-DebriefChannel {
   # telegram-chat.ps1, which the two were copied from each other. Read the WHOLE value and accept it
   # only if it is exactly one of the three; anything else falls back to the documented default. The
   # behaviour for the three VALID values is unchanged.
+  #
+  # ...except it was NOT unchanged, and this was a live regression: the real config line reads
+  # 'debrief_delivery: telegram       # where the 08:30 debrief lands: ...', so reading the whole line
+  # captured the trailing comment too, matched none of the three, and silently fell back to 'email' -
+  # rerouting the morning briefing off Alex's phone without a word. A trailing '# comment' is this
+  # file's own convention on every key. Strip it first, THEN require an exact match: 'telegram-only'
+  # and friends contain no '#' and are still rejected, so the hardening survives intact.
   try {
     $m = [regex]::Match((Get-Content (Join-Path $vault 'CONFIG.md') -Raw),
       '(?m)^\s*-?\s*debrief_delivery:[ \t]*([^\r\n]*)')
     if ($m.Success) {
-      $v = $m.Groups[1].Value.Trim().ToLower()
+      $v = ($m.Groups[1].Value -replace '#.*$', '').Trim().ToLower()
       if ($v -eq 'telegram' -or $v -eq 'email' -or $v -eq 'both') { return $v }
     }
   } catch { }
