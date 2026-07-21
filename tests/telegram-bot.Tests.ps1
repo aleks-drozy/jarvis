@@ -397,4 +397,20 @@ Remove-Item -LiteralPath $mockOffsetPath -Force -ErrorAction SilentlyContinue
 $VAULT      = $origVault
 $OffsetPath = $origOffsetPath
 
+# --- clearing an opportunity from the phone. Six hex chars, typed one-handed on a night shift. ---
+Assert ((Resolve-TelegramCommand 'done a1b2c3') -eq 'clear-opportunity') "done <id> -> clear-opportunity"
+Assert ((Resolve-TelegramCommand 'ignore a1b2c3') -eq 'clear-opportunity') "ignore <id> -> clear-opportunity"
+Assert ((Resolve-TelegramCommand 'DONE A1B2C3') -eq 'clear-opportunity') "case-insensitive"
+Assert ((Resolve-TelegramCommand '/done a1b2c3') -eq 'clear-opportunity') "leading slash tolerated"
+# ...but 'done' alone is not a clear, and must not swallow ordinary words
+Assert ((Resolve-TelegramCommand 'done') -ne 'clear-opportunity') "bare 'done' is not a clear"
+Assert ((Resolve-TelegramCommand 'done with the gym') -ne 'clear-opportunity') "prose is not a clear"
+
+$p = Get-OpportunityClearPayload 'done a1b2c3'
+Assert ($p.Id -eq 'a1b2c3') "id extracted"
+Assert ($p.Status -eq 'done') "done maps to status done"
+$p2 = Get-OpportunityClearPayload '/IGNORE A1B2C3'
+Assert ($p2.Id -eq 'a1b2c3') "id lowercased for matching"
+Assert ($p2.Status -eq 'ignored') "ignore maps to status ignored"
+
 Write-Host "telegram-bot: ALL PASS"

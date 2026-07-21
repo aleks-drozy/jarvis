@@ -36,6 +36,17 @@ $VAULT = (Get-JarvisConfig).vault_path
 
 # ---------- pure helpers (unit-tested; no network) ----------
 
+function Get-OpportunityClearPayload {
+  # 'done a1b2c3' / 'ignore A1B2C3' -> @{ Id='a1b2c3'; Status='done'|'ignored' }. Ids are lowercased
+  # because Alex types them on a phone, where the keyboard capitalises the first letter for you.
+  param([string]$Text)
+  if (-not $Text) { return $null }
+  $m = [regex]::Match($Text.Trim(), '^/?(done|ignore)\s+([0-9a-fA-F]{6})$', 'IgnoreCase')
+  if (-not $m.Success) { return $null }
+  $status = if ($m.Groups[1].Value.ToLower() -eq 'done') { 'done' } else { 'ignored' }
+  return @{ Id = $m.Groups[2].Value.ToLower(); Status = $status }
+}
+
 function Resolve-TelegramCommand {
   # Map an incoming message to ONE of a small whitelist of safe actions. Default = help. This is not a
   # shell: unknown text never executes anything - it just gets the help reply.
@@ -46,6 +57,7 @@ function Resolve-TelegramCommand {
   if (-not $Text -or -not $Text.Trim()) { return 'help' }   # empty AND whitespace-only -> help
   $t = $Text.Trim().ToLower() -replace '^/','' -replace '@\w+$',''   # strip a leading slash and @botname
   if ($t -match '^notes$') { return 'notes' }                                   # read recent notes back
+  if (Get-OpportunityClearPayload $Text) { return 'clear-opportunity' }
   if ($t -match '^(note|log|idea|remember|todo|jot|capture)\b') { return 'note' } # capture the rest as a note
   switch -regex ($t) {
     '^(debrief|brief|briefing|what''?s my day|what should i do)$' { return 'debrief' }
@@ -316,6 +328,19 @@ function Invoke-TelegramCommand {
       # rather than retried - the reply already reached Alex either way.
       foreach ($chunk in @(Split-TelegramText $reply 3900)) { Send-Telegram -Text $chunk -Cred $Cred | Out-Null }
       try { Write-ChatLog -Message $Text -Reply $reply } catch { Write-Warning "chat log write failed (reply already sent): $($_.Exception.Message)" }
+    }
+    'clear-opportunity' {
+      . (Join-Path $BIN 'opportunity-store.ps1') -DotSourceOnly
+      $payload = Get-OpportunityClearPayload $Text
+      $records = @(Read-OpportunityStore)
+      $upd = Set-OpportunityStatus -Records $records -Id $payload.Id -Status $payload.Status
+      if ($upd.Found) {
+        Write-OpportunityStore -Records $upd.Records
+        $word = if ($payload.Status -eq 'done') { 'Marked done' } else { 'Dropped' }
+        Send-Telegram -Text "$word, Sir. I will stop raising $($payload.Id)." -Cred $Cred | Out-Null
+      } else {
+        Send-Telegram -Text "I have no open item with id $($payload.Id), Sir. It may already be cleared." -Cred $Cred | Out-Null
+      }
     }
     default  {
       $extra = if (Test-ChatEnabled -VaultPath $VAULT) { ' You can also just ask me things in plain English, Sir.' } else { '' }
