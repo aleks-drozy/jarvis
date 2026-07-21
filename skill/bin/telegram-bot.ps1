@@ -412,7 +412,7 @@ if ($Send) {
 
 if ($AlertJobMail) {
   . (Join-Path $BIN 'check-job-mail.ps1') -DotSourceOnly
-  $res = Get-JobMail -SinceHours $SinceHours -SenderFilter 'linkedin|indeed|gradireland|glassdoor|jobs\.ie|irishjobs|mastercard|workday|myworkday|maynooth|nuim\.ie|vodafone' -MaxMessages 40 -Mode 'jobs'
+  $res = Get-JobMail -SinceHours $SinceHours -SenderFilter $JarvisJobSenderFilter -MaxMessages 40 -Mode 'jobs'
   $msg = Format-JobMailAlert $res.JobAlerts
   if ($msg) { Send-Telegram -Text $msg -Cred $cred | Out-Null; Write-Host 'Alert sent.' }
   else { Write-Host 'No status-change mail to alert on.' }
