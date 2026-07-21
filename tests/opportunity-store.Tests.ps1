@@ -16,6 +16,15 @@ try {
   Assert ($a1 -ne $b) "different subjects must derive different ids"
   Assert ($a1 -match '^[0-9a-f]{6}$') "id is 6 lowercase hex chars, short enough to type on a phone, got '$a1'"
 
+  # --- CARRIED FIX from the Task 2 review: the old seed joined "$From|$Subject|$Date" with an
+  # --- unescaped pipe. Subject is attacker-controlled, so a pipe inside it could shift the field
+  # --- boundary and make two STRUCTURALLY DIFFERENT triples hash to the SAME seed - a genuinely new
+  # --- opportunity silently treated as already-seen and never pushed. Length-prefixing each field
+  # --- closes it: ('a', 'b|c', 'd') and ('a|b', 'c', 'd') both used to join to "a|b|c|d".
+  $collide1 = Get-OpportunityId -From 'a'   -Subject 'b|c' -Date 'd'
+  $collide2 = Get-OpportunityId -From 'a|b' -Subject 'c'   -Date 'd'
+  Assert ($collide1 -ne $collide2) "a pipe inside Subject must not let two different (From,Subject,Date) triples collide on the same id"
+
   # --- missing file reads as empty, never throws ---
   Assert ((@(Read-OpportunityStore -Path $store)).Count -eq 0) "absent store reads as empty"
 
@@ -67,5 +76,22 @@ try {
 } finally {
   Remove-Item $tmp -Recurse -Force -ErrorAction SilentlyContinue
 }
+
+# --- Select-OpportunityAlerts: ONLY doors that are open. A rejection is not an opportunity: Alex can
+# --- do nothing about it, it belongs in the 08:30 debrief, and an alarm that fires for things you
+# --- cannot act on is an alarm you switch off.
+. "$PSScriptRoot\..\skill\bin\check-opportunities.ps1" -DotSourceOnly
+$alerts = @(
+  [pscustomobject]@{ From='invite@codesignal.com'; Subject='Assessment invitation'; Date='2026-07-21'; Classification='interview' },
+  [pscustomobject]@{ From='no-reply@workable.com'; Subject='Unfortunately...';       Date='2026-07-21'; Classification='rejection' },
+  [pscustomobject]@{ From='hr@company.com';        Subject='Offer of employment';    Date='2026-07-21'; Classification='offer' },
+  [pscustomobject]@{ From='jobs@linkedin.com';     Subject='5 new jobs for you';     Date='2026-07-21'; Classification='generic' }
+)
+$sel = @(Select-OpportunityAlerts -Alerts $alerts)
+Assert ($sel.Count -eq 2) "only interview + offer are opportunities, got $($sel.Count)"
+Assert (($sel | Where-Object { $_.Classification -eq 'rejection' }).Count -eq 0) "a rejection must NEVER open an alarm record"
+Assert (($sel | Where-Object { $_.Classification -eq 'generic' }).Count -eq 0) "a job digest must NEVER open an alarm record"
+Assert ((@(Select-OpportunityAlerts -Alerts @())).Count -eq 0) "empty in, empty out"
+Assert ((@(Select-OpportunityAlerts -Alerts $null)).Count -eq 0) "null in, empty out - never throw"
 
 Write-Host "opportunity-store: ALL PASS"

@@ -22,8 +22,16 @@ function Get-OpportunityId {
   # re-delivered message or a restarted task cannot produce a second push. This project already shipped
   # a duplicate-briefing incident (2026-07-16) from missing exactly this property.
   # Six chars is deliberate: Alex types it on a phone to clear a record.
+  #
+  # CARRIED FIX (Task 2 review): joining as "$From|$Subject|$Date" is ambiguous - Subject is
+  # attacker-controlled (see file header), and a pipe inside it can shift the field boundary so two
+  # STRUCTURALLY DIFFERENT triples land on the SAME seed, e.g. ('a','b|c','d') and ('a|b','c','d')
+  # both used to join to "a|b|c|d". That is the inverse of a duplicate push: a genuinely new
+  # opportunity gets silently treated as already-seen and never pushed. Length-prefixing each field
+  # makes the join unambiguous - no field's content can forge a delimiter, because the exact number
+  # of characters that belong to it is stated before it.
   param([string]$From, [string]$Subject, [string]$Date)
-  $seed = ("$From|$Subject|$Date").ToLower()
+  $seed = ("$($From.Length):$From|$($Subject.Length):$Subject|$($Date.Length):$Date").ToLower()
   $sha  = [System.Security.Cryptography.SHA256]::Create()
   try {
     $bytes = $sha.ComputeHash([System.Text.Encoding]::UTF8.GetBytes($seed))
