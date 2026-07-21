@@ -1,8 +1,17 @@
 # tests/check-job-mail.Tests.ps1 - the job-mail sender filter and subject classifier.
 # NO NETWORK: dot-sources check-job-mail.ps1 and exercises the pure parts only.
 $ErrorActionPreference = 'Stop'
+Set-StrictMode -Version Latest
 . "$PSScriptRoot\..\skill\bin\check-job-mail.ps1" -DotSourceOnly
 function Assert($c,$m){ if(-not $c){ Write-Error "FAIL: $m"; exit 1 } }
+
+# --- VACUITY GUARD, must run FIRST. If $JarvisJobSenderFilter is ever undefined (e.g. a typo'd
+# --- rename), '-imatch' against $null/'' coerces to an empty pattern that matches EVERYTHING, so
+# --- every "must match" assertion below would pass for the wrong reason - only the "must NOT match"
+# --- noise assertions would catch it, with a misleading message. Assert real presence and content
+# --- before any pattern-matching loop runs, so a broken filter fails loudly and specifically here.
+Assert (Test-Path Variable:JarvisJobSenderFilter) "JarvisJobSenderFilter must be defined (sender filter must be defined)"
+Assert (-not [string]::IsNullOrWhiteSpace($JarvisJobSenderFilter)) "JarvisJobSenderFilter must be non-empty (sender filter must be defined)"
 
 # --- The filter must not NARROW. Every sender it matched before must still match. ---
 foreach ($old in @('linkedin','indeed','gradireland','glassdoor','jobs.ie','irishjobs',
@@ -28,6 +37,25 @@ foreach ($ats in @('greenhouse','lever','smartrecruiters','teamtailor','ashby','
 foreach ($noise in @('newsletter@substack.com','friend@gmail.com','billing@electricireland.ie')) {
   Assert (-not ($noise -imatch $JarvisJobSenderFilter)) "'$noise' must NOT match the job filter"
 }
+
+# --- 'ashby' and 'ashbyhq' were redundant (ashby already matches ashbyhq.com); 'harri' is anchored
+# --- to its real domain so it doesn't also catch harrison@/harriet@/harrington@-style senders. ---
+Assert ('careers@ashbyhq.com' -imatch $JarvisJobSenderFilter) "ashbyhq.com (the real Ashby domain) must still match via 'ashby'"
+foreach ($falsePositive in @('harrison@example.com','harriet@example.com','harrington@example.com')) {
+  Assert (-not ($falsePositive -imatch $JarvisJobSenderFilter)) "'$falsePositive' must NOT match (harri must be anchored, not bare)"
+}
+
+# --- THE PRODUCTION PATH. debrief.md (both the inbox and jobs modules) and app/main.js all invoke
+# --- the script's standalone entry point with NO -SenderFilter override. That path must resolve to
+# --- the SAME widened filter as $JarvisJobSenderFilter, not a second, stale copy - otherwise the
+# --- Learnosity/Workable and CodeSignal misses stay invisible in the 08:30 debrief in production
+# --- even though $JarvisJobSenderFilter itself is correct. $SenderFilter here is the real param()
+# --- default from dot-sourcing with no override supplied - exactly the state debrief.md/main.js run in.
+Assert ((Resolve-JobSenderFilter -SenderFilter $SenderFilter) -imatch 'workable') "production entry point (no -SenderFilter override) must reach Workable"
+Assert ((Resolve-JobSenderFilter -SenderFilter $SenderFilter) -imatch 'codesignal') "production entry point (no -SenderFilter override) must reach CodeSignal"
+
+# --- An explicit -SenderFilter override must still win over the shared default. ---
+Assert ((Resolve-JobSenderFilter -SenderFilter 'onlythis') -eq 'onlythis') "explicit -SenderFilter override must win over the shared default"
 
 # --- The classifier already handles the phrases we care about (regression, not new work) ---
 Assert ((Classify-JobMailSubject 'Your CodeSignal assessment invitation') -eq 'interview') "assessment subject -> interview"
