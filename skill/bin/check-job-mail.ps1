@@ -56,6 +56,27 @@ function Decode-MimeHeader {
   return $out
 }
 
+# THE SENDER FILTER. One definition, shared by every caller, because it drifted once and cost a miss.
+#
+# 2026-07-20: Learnosity rejected Alex through WORKABLE and Jarvis never reported it. The classifier
+# below would have tagged it correctly - it was simply never shown the message, because 'workable' was
+# not in this list. The same gap means a CodeSignal assessment invite is invisible, which is how the
+# 2026-07-10 Susquehanna invite expired unactioned: the only door that opened in 44 applications.
+#
+# Widening this widens what Jarvis SEES, not what it READS. Safety 5 is unchanged: sender + subject +
+# date, never bodies.
+$script:JarvisJobSenderFilter = @(
+  # job boards and aggregators
+  'linkedin','indeed','gradireland','glassdoor','jobs\.ie','irishjobs','jooble','adzuna',
+  # applicant tracking systems - where the actual decisions arrive from
+  'workday','myworkday','greenhouse','lever\.co','workable','smartrecruiters','teamtailor',
+  'ashby','ashbyhq','icims','taleo','successfactors','rezoomo','harri','amris','pinpointhq',
+  # assessment platforms - the time-limited ones, the reason this list was widened
+  'codesignal','hackerrank','codility','karat','hirevue','testgorilla','coderbyte','devskiller',
+  # employers already in the tracker
+  'mastercard','maynooth','nuim\.ie','vodafone'
+) -join '|'
+
 function Classify-JobMailSubject {
   # Coarse application-status guess from the SUBJECT LINE ALONE (headers only - Safety 5; bodies never
   # read). Precedence: digest -> rejection -> interview -> offer -> generic. Subject-only is imperfect
