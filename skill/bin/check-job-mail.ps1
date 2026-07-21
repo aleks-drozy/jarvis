@@ -1,11 +1,15 @@
 # skill/bin/check-job-mail.ps1
 # Reads recent Gmail INBOX headers via IMAP (app password from ~/.jarvis/gmail.cred.xml) and
-# reports job-alert emails (LinkedIn, Indeed, gradireland, ...). SENDER + SUBJECT + DATE ONLY,
-# never bodies (Jarvis Safety rule 5). Works headless: no claude.ai connector involved.
-# Usage: powershell -File check-job-mail.ps1 [-SinceHours 24] [-SenderFilter 'linkedin|indeed|gradireland']
+# reports job-alert emails (LinkedIn, Indeed, Workable, CodeSignal, ...). SENDER + SUBJECT + DATE
+# ONLY, never bodies (Jarvis Safety rule 5). Works headless: no claude.ai connector involved.
+# Usage: powershell -File check-job-mail.ps1 [-SinceHours 24] [-SenderFilter 'linkedin|indeed|workable']
+# Omit -SenderFilter to use the full shared filter ($script:JarvisJobSenderFilter, defined below -
+# job boards, ATS platforms, assessment platforms, tracked employers). An explicit -SenderFilter
+# always overrides it.
 param(
   [int]$SinceHours = 24,
-  [string]$SenderFilter = 'linkedin|indeed|gradireland|glassdoor|jobs\.ie|irishjobs|mastercard|workday|myworkday|maynooth|nuim\.ie|vodafone',
+  # empty by default: resolved to $script:JarvisJobSenderFilter at call time unless overridden below
+  [string]$SenderFilter = '',
   # sensitive categories are counted but never itemised (Jarvis Safety rule 5)
   [string]$SensitiveFilter = 'bank|revolut|paypal|stripe|payment|invoice|statement|transaction|medical|doctor|clinic|prescription|verification code|2fa|one.?time|passcode|password|security alert',
   [ValidateSet('jobs','inbox','both')][string]$Mode = 'jobs',
@@ -70,12 +74,26 @@ $script:JarvisJobSenderFilter = @(
   'linkedin','indeed','gradireland','glassdoor','jobs\.ie','irishjobs','jooble','adzuna',
   # applicant tracking systems - where the actual decisions arrive from
   'workday','myworkday','greenhouse','lever\.co','workable','smartrecruiters','teamtailor',
-  'ashby','ashbyhq','icims','taleo','successfactors','rezoomo','harri','amris','pinpointhq',
+  # 'ashby' already matches 'ashbyhq.com' (the real Ashby sender domain) as a substring, so a
+  # separate 'ashbyhq' entry was redundant and removed. 'harri' is anchored to its real domain
+  # (harri.com) so it does not also catch harrison@/harriet@/harrington@-style senders.
+  'ashby','icims','taleo','successfactors','rezoomo','harri\.com','amris','pinpointhq',
   # assessment platforms - the time-limited ones, the reason this list was widened
   'codesignal','hackerrank','codility','karat','hirevue','testgorilla','coderbyte','devskiller',
   # employers already in the tracker
   'mastercard','maynooth','nuim\.ie','vodafone'
 ) -join '|'
+
+function Resolve-JobSenderFilter {
+  # The ONE place a caller's -SenderFilter is reconciled with the shared filter above. An explicit,
+  # non-empty override always wins; otherwise every caller (this script's own standalone entry point,
+  # telegram-bot.ps1, or a future caller) falls back to $script:JarvisJobSenderFilter. This is what
+  # keeps it to one real definition - the param() default below is deliberately empty, not a second
+  # copy of the list, so it cannot drift out of sync with the shared filter again.
+  param([string]$SenderFilter)
+  if ($SenderFilter) { return $SenderFilter }
+  return $script:JarvisJobSenderFilter
+}
 
 function Classify-JobMailSubject {
   # Coarse application-status guess from the SUBJECT LINE ALONE (headers only - Safety 5; bodies never
@@ -187,5 +205,6 @@ function Get-JobMail {
 }
 
 if ($DotSourceOnly) { return }
-Get-JobMail -SinceHours $SinceHours -SenderFilter $SenderFilter -MaxMessages $MaxMessages `
+$effectiveSenderFilter = Resolve-JobSenderFilter -SenderFilter $SenderFilter
+Get-JobMail -SinceHours $SinceHours -SenderFilter $effectiveSenderFilter -MaxMessages $MaxMessages `
   -SensitiveFilter $SensitiveFilter -Mode $Mode | ConvertTo-Json -Depth 4
