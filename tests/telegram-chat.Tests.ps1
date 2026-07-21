@@ -21,12 +21,20 @@ Assert (-not (Test-ChatEnabled -VaultPath $tmp)) "key absent -> disabled (fail c
 # --- matched '(on|off)\b' and read the CAPTURED WORD, so 'on-demand' matched 'on' (a hyphen is a
 # --- non-word character, so the word boundary is satisfied between 'n' and '-') and turned the entire
 # --- remote chat surface ON. Only an exact 'on' may enable; every near miss disables.
-foreach ($malformed in @('on-demand', 'on demand', 'on!', 'onx', 'on-call', 'true', 'yes', 'ON-DEMAND', 'on # for now', '')) {
+foreach ($malformed in @('on-demand', 'on demand', 'on!', 'onx', 'on-call', 'true', 'yes', 'ON-DEMAND', '')) {
   Set-Content -Encoding UTF8 (Join-Path $tmp 'CONFIG.md') "- modules:`n    telegram_chat: $malformed"
   Assert (-not (Test-ChatEnabled -VaultPath $tmp)) "malformed kill-switch value '$malformed' must read as DISABLED, never as enabled"
 }
-# ...while the valid values keep working, including with trailing whitespace and odd casing
-foreach ($enabled in @('on', 'ON', 'On', "on   ")) {
+# ...while the valid values keep working, including with trailing whitespace and odd casing.
+#
+# A TRAILING COMMENT IS A VALID VALUE, and this list is where that was got wrong. 'on # for now' used
+# to sit in the malformed list above, asserting a commented value reads as DISABLED. That assertion
+# was itself the bug: EVERY key in the real CONFIG.md modules block carries a trailing '# comment' -
+# it is the file's own convention - so following the surrounding style silently disabled the feature,
+# and the sibling Get-DebriefChannel rerouted the 08:30 briefing off Alex's phone to email without a
+# word. Caught 2026-07-21 by enabling chat for the smoke test and watching it read back False.
+# The exact-match hardening survives: the near misses above carry no '#' and are still rejected.
+foreach ($enabled in @('on', 'ON', 'On', "on   ", 'on # for now', 'on   # enabled for the smoke test', "on`t# tab then comment")) {
   Set-Content -Encoding UTF8 (Join-Path $tmp 'CONFIG.md') "- modules:`n    telegram_chat: $enabled"
   Assert (Test-ChatEnabled -VaultPath $tmp) "'$enabled' must still enable chat"
 }
