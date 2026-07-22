@@ -36,6 +36,17 @@ $VAULT = (Get-JarvisConfig).vault_path
 
 # ---------- pure helpers (unit-tested; no network) ----------
 
+function Get-OpportunityClearPayload {
+  # 'done a1b2c3' / 'ignore A1B2C3' -> @{ Id='a1b2c3'; Status='done'|'ignored' }. Ids are lowercased
+  # because Alex types them on a phone, where the keyboard capitalises the first letter for you.
+  param([string]$Text)
+  if (-not $Text) { return $null }
+  $m = [regex]::Match($Text.Trim(), '^/?(done|ignore)\s+([0-9a-fA-F]{6})$', 'IgnoreCase')
+  if (-not $m.Success) { return $null }
+  $status = if ($m.Groups[1].Value.ToLower() -eq 'done') { 'done' } else { 'ignored' }
+  return @{ Id = $m.Groups[2].Value.ToLower(); Status = $status }
+}
+
 function Resolve-TelegramCommand {
   # Map an incoming message to ONE of a small whitelist of safe actions. Default = help. This is not a
   # shell: unknown text never executes anything - it just gets the help reply.
@@ -46,6 +57,7 @@ function Resolve-TelegramCommand {
   if (-not $Text -or -not $Text.Trim()) { return 'help' }   # empty AND whitespace-only -> help
   $t = $Text.Trim().ToLower() -replace '^/','' -replace '@\w+$',''   # strip a leading slash and @botname
   if ($t -match '^notes$') { return 'notes' }                                   # read recent notes back
+  if (Get-OpportunityClearPayload $Text) { return 'clear-opportunity' }
   if ($t -match '^(note|log|idea|remember|todo|jot|capture)\b') { return 'note' } # capture the rest as a note
   switch -regex ($t) {
     '^(debrief|brief|briefing|what''?s my day|what should i do)$' { return 'debrief' }
@@ -108,18 +120,28 @@ function Select-ActionableUpdates {
     if ($null -ne $u.Date -and $u.Date -lt $Now.AddMinutes(-$MaxAgeMinutes)) { continue }   # stale
     $fresh.Add($u)
   }
-  # keep the LAST update per collapsible command; keep every note AND every chat message.
+  # keep the LAST update per collapsible command; keep every note, chat message AND clear-opportunity.
   # -ChatEnabled MUST be threaded into Resolve-TelegramCommand here: without it, chat messages resolve
   # to 'help' and collapse into one, silently discarding questions (the 2026-07-16 bug class).
+  #
+  # IMPORTANT-2 FIX (review): clear-opportunity used to collapse like /debrief or /status. But unlike
+  # those idempotent commands, "done a1b2c3" and "ignore ff00aa" are DISTINCT instructions carrying
+  # different ids - collapsing to the last one silently drops every other clear in the same poll batch,
+  # with no reply at all for the dropped ones. Verified by the reviewer: two clears in one poll batch ->
+  # actionable count = 1 (one silently dropped). Realistic trigger: Alex wakes up, clears three
+  # reminders in quick succession, the 3-minute poll batches them - and gets no reply for the dropped
+  # ones, which keep nagging him. That is the fastest way to train someone to ignore an alarm.
+  # Exempting it exactly like 'note' (each clear is distinct data, not a repeat of the same request)
+  # fixes it.
   $lastOf = @{}
   foreach ($u in $fresh) {
     $cmd = Resolve-TelegramCommand -Text $u.Text -ChatEnabled:$ChatEnabled
-    if ($cmd -ne 'note' -and $cmd -ne 'chat') { $lastOf[$cmd] = $u.UpdateId }
+    if ($cmd -ne 'note' -and $cmd -ne 'chat' -and $cmd -ne 'clear-opportunity') { $lastOf[$cmd] = $u.UpdateId }
   }
   $out = New-Object System.Collections.Generic.List[object]
   foreach ($u in $fresh) {
     $cmd = Resolve-TelegramCommand -Text $u.Text -ChatEnabled:$ChatEnabled
-    if ($cmd -eq 'note' -or $cmd -eq 'chat') { $out.Add($u); continue }
+    if ($cmd -eq 'note' -or $cmd -eq 'chat' -or $cmd -eq 'clear-opportunity') { $out.Add($u); continue }
     if ($lastOf[$cmd] -eq $u.UpdateId) { $out.Add($u) }   # superseded duplicates are dropped
   }
   return $out
@@ -242,6 +264,10 @@ function Get-TodayDebriefText {
 }
 
 function Get-StatusText {
+  # -OpportunityHeartbeatPath: optional test seam, same idea as Invoke-OpportunitySweep's -StorePath.
+  # Defaults to the real path so production behaviour is unchanged; a test passes a throwaway path
+  # under $env:TEMP so this can be exercised without ever touching the real ~/.jarvis heartbeat.
+  param([string]$OpportunityHeartbeatPath = (Join-Path $HOME '.jarvis\opportunity-heartbeat.json'))
   $parts = New-Object System.Collections.Generic.List[string]
   try {
     $s = & (Join-Path $BIN 'scheduler-status.ps1') | ConvertFrom-Json
@@ -256,13 +282,31 @@ function Get-StatusText {
       $parts.Add("Bank feed: " + $(if ($h.ok) { "ok (as of $($h.asOf))" } else { "error" }))
     } catch { }
   }
+  # IMPORTANT-3 FIX (review): a butler who is broken and quiet about it is worse than no butler. Every
+  # opportunity-sweep failure used to be swallowed into a Write-Warning the hidden wscript launcher
+  # discards, and the script always exits 0 - so Task Scheduler reports success forever even after (say)
+  # the Gmail app password expires and the sweep has gone silently quiet for good. Surface the same
+  # heartbeat file Invoke-OpportunitySweep now writes every run (opportunity-store.ps1), alongside the
+  # bank feed above.
+  $ohb = $OpportunityHeartbeatPath
+  if (Test-Path $ohb) {
+    try {
+      $oh = (Get-Content $ohb -Raw) -replace '^\xEF\xBB\xBF','' | ConvertFrom-Json
+      $parts.Add("Opportunity sweep: " + $(if ($oh.ok) { "ok (as of $($oh.asOf)), $($oh.openCount) open" } else { "error (as of $($oh.asOf))" }))
+    } catch { }
+  }
   $note = Get-TodayDebriefText
   $parts.Add($(if ($note) { "Today's debrief: written." } else { "Today's debrief: not yet." }))
   return "At your service, Sir.`n" + ($parts -join "`n")
 }
 
 function Invoke-TelegramCommand {
-  param([string]$Command, [string]$Text, $Cred)
+  # -OpportunityStorePath (IMPORTANT-4 fix, review): the clear-opportunity branch used to call
+  # Read-OpportunityStore / Write-OpportunityStore with no -Path at all, which hard-codes the REAL
+  # ~/.jarvis/opportunities.json - no test could exercise this dispatch branch without touching it.
+  # Optional and empty by default so production behaviour (the real store) is unchanged; a test passes
+  # a throwaway path under $env:TEMP, exactly the seam Invoke-OpportunitySweep already uses for -StorePath.
+  param([string]$Command, [string]$Text, $Cred, [string]$OpportunityStorePath = '')
   switch ($Command) {
     'debrief' {
       Send-Telegram -Text 'On it, Sir. Generating your debrief now - it will arrive here shortly.' -Cred $Cred | Out-Null
@@ -316,6 +360,20 @@ function Invoke-TelegramCommand {
       # rather than retried - the reply already reached Alex either way.
       foreach ($chunk in @(Split-TelegramText $reply 3900)) { Send-Telegram -Text $chunk -Cred $Cred | Out-Null }
       try { Write-ChatLog -Message $Text -Reply $reply } catch { Write-Warning "chat log write failed (reply already sent): $($_.Exception.Message)" }
+    }
+    'clear-opportunity' {
+      . (Join-Path $BIN 'opportunity-store.ps1') -DotSourceOnly
+      $storePath = if ($OpportunityStorePath) { $OpportunityStorePath } else { Get-OpportunityStorePath }
+      $payload = Get-OpportunityClearPayload $Text
+      $records = @(Read-OpportunityStore -Path $storePath)
+      $upd = Set-OpportunityStatus -Records $records -Id $payload.Id -Status $payload.Status
+      if ($upd.Found) {
+        Write-OpportunityStore -Records $upd.Records -Path $storePath
+        $word = if ($payload.Status -eq 'done') { 'Marked done' } else { 'Dropped' }
+        Send-Telegram -Text "$word, Sir. I will stop raising $($payload.Id)." -Cred $Cred | Out-Null
+      } else {
+        Send-Telegram -Text "I have no open item with id $($payload.Id), Sir. It may already be cleared." -Cred $Cred | Out-Null
+      }
     }
     default  {
       $extra = if (Test-ChatEnabled -VaultPath $VAULT) { ' You can also just ask me things in plain English, Sir.' } else { '' }
@@ -412,7 +470,7 @@ if ($Send) {
 
 if ($AlertJobMail) {
   . (Join-Path $BIN 'check-job-mail.ps1') -DotSourceOnly
-  $res = Get-JobMail -SinceHours $SinceHours -SenderFilter 'linkedin|indeed|gradireland|glassdoor|jobs\.ie|irishjobs|mastercard|workday|myworkday|maynooth|nuim\.ie|vodafone' -MaxMessages 40 -Mode 'jobs'
+  $res = Get-JobMail -SinceHours $SinceHours -SenderFilter $JarvisJobSenderFilter -MaxMessages 40 -Mode 'jobs'
   $msg = Format-JobMailAlert $res.JobAlerts
   if ($msg) { Send-Telegram -Text $msg -Cred $cred | Out-Null; Write-Host 'Alert sent.' }
   else { Write-Host 'No status-change mail to alert on.' }
