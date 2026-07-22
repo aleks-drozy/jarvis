@@ -1,9 +1,8 @@
 # v3.0.0
 
-*Draft notes for the `v3.0.0` tag, which has not been cut yet. `v2.0` (2026-07-12) is currently the
-only tag in the repository. Everything below is on `master` and live.*
+*Released 2026-07-22. Previous tag `v2.0` (2026-07-12). Everything below is on `master` and live.*
 
-**80 commits since `v2.0`, over ten days, including 8 merged pull requests (#1 through #8).** The
+**84 commits since `v2.0`, over ten days, including 8 merged pull requests (#1 through #8).** The
 headline is that Jarvis stopped being a program that runs on my laptop and became a program a
 stranger can clone: one config file replaces every hardcoded path and email address, and a test
 fails the build if one comes back.

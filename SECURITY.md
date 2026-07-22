@@ -2,8 +2,13 @@
 
 ## Supported versions
 
-Jarvis is a rolling-release personal project. Only the latest commit on `master`
-is supported. There are no versioned releases and no backported fixes.
+Jarvis is a personal project. Only the latest commit on `master` is supported:
+fixes land there and are not backported to earlier tags.
+
+Tags mark points in that history rather than maintained branches. The current
+tag is `v3.0.0` (2026-07-22); `v2.0` (2026-07-12) precedes it. If you are
+running a tag rather than `master`, you are running code that will not receive
+security fixes.
 
 ## Reporting a vulnerability
 

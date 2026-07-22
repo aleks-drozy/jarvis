@@ -511,11 +511,13 @@ morning stays diagnosable.
 
 ## Versioning and maturity
 
-Rolling release. `master` is the only supported branch, as stated in `SECURITY.md`. There is one
-historical tag, `v2.0` (2026-07-12), cut before the `~/.jarvis/config.json` change. Everything since
-is written up in [`docs/RELEASE-v3.0.0.md`](docs/RELEASE-v3.0.0.md), which becomes the notes for the
-`v3.0.0` tag when it is cut. `app/package.json` carries its own unrelated `0.1.0` for the Electron
-companion.
+Semantic versioning from `v3.0.0` (2026-07-22), whose notes are in
+[`docs/RELEASE-v3.0.0.md`](docs/RELEASE-v3.0.0.md). The earlier tag `v2.0` (2026-07-12) predates
+that and does not follow semver, which is why the first semver tag is a major: `~/.jarvis/config.json`
+replaced every hardcoded path between them, so a `v2.0` checkout will not run against a `v3` install.
+
+`master` remains the only supported branch, as stated in `SECURITY.md`: tags mark history, they are
+not maintained. `app/package.json` carries its own unrelated `0.1.0` for the Electron companion.
 
 Feature maturity, honestly tiered:
 
