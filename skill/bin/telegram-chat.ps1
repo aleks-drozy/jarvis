@@ -228,8 +228,8 @@ function Invoke-ChatPrefetch {
     # Technically true of the account it can see, materially wrong as an answer, and exactly the
     # "quiet confident wrong" class this project refuses to ship. The PSD2 AIS feed returns the
     # BALANCE OF THE LINKED CURRENT ACCOUNT ONLY; Revolut vaults, pots and savings sub-accounts are
-    # structurally invisible to it (already documented in PHASE3-BANK.md, and the same trap caught a
-    # human reconciliation on 2026-07-19). The recorded figures live in FINANCE.md, which is inside
+    # structurally invisible to it (a known limit of the AIS feed, and the same trap caught a human
+    # reconciliation on 2026-07-19). The recorded figures live in FINANCE.md, which is inside
     # the read scope - so say so here rather than hoping the model infers it.
     [void]$sb.AppendLine('## collector: bank-scope-note')
     [void]$sb.AppendLine('The figures above are the LINKED CURRENT ACCOUNT ONLY. This feed cannot see Revolut vaults, pots or savings sub-accounts, so a low or zero balance here does NOT mean Alex has no money.')

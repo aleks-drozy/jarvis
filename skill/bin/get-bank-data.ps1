@@ -2,7 +2,7 @@
 # Phase 3: read-only open-banking feed via Enable Banking (PSD2 AIS, Irish coverage incl. Revolut/
 # AIB/Bank of Ireland/PTSB). Swapped from GoCardless Bank Account Data 2026-07 - GoCardless closed
 # Bank Account Data to new signups mid-2025 and is winding it down (confirmed live, not a retry-later
-# outage). See PHASE3-BANK.md and DECISIONS.md for the switch.
+# outage). The rebuild against Enable Banking landed the same day; see docs/RELEASE-v3.0.0.md.
 #
 # READ-ONLY BY CONSTRUCTION (Safety rule 1): this script calls ONLY the AIS (account information)
 # side of the Enable Banking API - /aspsps, /sessions, /accounts/*/balances, /accounts/*/transactions.
@@ -151,12 +151,12 @@ if ($DotSourceOnly) { return }
 try {
   if (-not (Test-Path $CredPath)) {
     [pscustomobject]@{ configured = $false; reason = "no credential at $CredPath"
-      setup = 'run skill/bin/setup-bank.ps1 -GenerateKeypair (checklist: vault 12-jarvis/PHASE3-BANK.md)' } | ConvertTo-Json -Depth 4
+      setup = 'run skill/bin/setup-bank.ps1 -GenerateKeypair (run it with no switches to print the ordered checklist)' } | ConvertTo-Json -Depth 4
     exit 0
   }
   if (-not (Test-Path $StatePath)) {
     [pscustomobject]@{ configured = $false; reason = "no session state at $StatePath"
-      setup = 'run skill/bin/setup-bank.ps1 -NewSession (checklist: vault 12-jarvis/PHASE3-BANK.md)' } | ConvertTo-Json -Depth 4
+      setup = 'run skill/bin/setup-bank.ps1 -NewSession (run it with no switches to print the ordered checklist)' } | ConvertTo-Json -Depth 4
     exit 0
   }
   $state = Get-Content $StatePath -Raw | ConvertFrom-Json
