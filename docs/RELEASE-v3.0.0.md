@@ -3,7 +3,7 @@
 *Draft notes for the `v3.0.0` tag, which has not been cut yet. `v2.0` (2026-07-12) is currently the
 only tag in the repository. Everything below is on `master` and live.*
 
-**80 commits since `v2.0`, over ten days, including two merged pull requests (#7 and #8).** The
+**80 commits since `v2.0`, over ten days, including 8 merged pull requests (#1 through #8).** The
 headline is that Jarvis stopped being a program that runs on my laptop and became a program a
 stranger can clone: one config file replaces every hardcoded path and email address, and a test
 fails the build if one comes back.
@@ -165,8 +165,9 @@ Comment characters are overwritten with spaces rather than deleted, so byte offs
 second view also blanks string literals, because a planted string satisfies a "this code exists"
 assertion just as well.
 
-Then **seven positive controls on the strippers themselves**, so a stripper that silently did nothing
-cannot report the repair as in place.
+Then **eleven positive controls on the strippers themselves** (five on the comment stripper, six more
+on the string-literal blanker), so a stripper that silently did nothing cannot report the repair as in
+place.
 
 ### 4. The kill switch that read `on-demand` as on
 
@@ -291,8 +292,9 @@ Stated so nobody has to find them by surprise.
   tracked PowerShell scripts. Every tracked `.ps1` and `.vbs` is currently pure ASCII, but the
   enforcement is narrower than the guarantee. Widening it is the next small job.
 - **The personal-data guard hunts four literal patterns** and exempts `docs/`, `PRIVACY.md` and
-  `TERMS.md`. My name and email appear in `LICENSE`, `PRIVACY.md` and `TERMS.md` by design, and a
-  small number of vault folder names are still hardcoded in `skill/` rather than templated.
+  `TERMS.md`. My name appears in `LICENSE`, `PRIVACY.md` and `TERMS.md` by design, and my email
+  appears in `PRIVACY.md` and `TERMS.md` (not `LICENSE`, which carries the name only); a small number
+  of vault folder names are still hardcoded in `skill/` rather than templated.
 - **The desktop app is launched by hand**, not by a scheduled task. It is the one part of the system
   that is on demand rather than automated.
 - **Adversarial review artifacts are gitignored.** The process is documented in `CONTRIBUTING.md` and
