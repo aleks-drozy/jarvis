@@ -24,6 +24,19 @@ function Select-OpportunityAlerts {
   return @(@($Alerts) | Where-Object { $_.Classification -eq 'interview' -or $_.Classification -eq 'offer' })
 }
 
+function Get-OpportunityMaxMessages {
+  # CRITICAL-1 FIX, second half (review): check-job-mail.ps1 keeps only the newest -MaxMessages ids
+  # (SEARCH returns ids in ascending order, and it slices the newest N off the end). A wider
+  # SinceHours window on a busy inbox with a MaxMessages that stayed fixed at 40 would silently drop
+  # the OLDEST messages in that wider window - reintroducing the exact hole the window fix closes,
+  # just one layer down. Scale MaxMessages to match: same 40-per-24h budget the original default
+  # implied, floored at 40 so a normal (or narrower) window never regresses.
+  param([int]$SinceHours, [int]$PerDayBudget = 40, [int]$MinMessages = 40)
+  $scaled = [int][math]::Ceiling(($SinceHours / 24.0) * $PerDayBudget)
+  if ($scaled -lt $MinMessages) { return $MinMessages }
+  return $scaled
+}
+
 function Format-OpportunityPush {
   # Composed here, from variables, never by splicing a subject into a command line.
   param($Record, [switch]$Reminder)
@@ -54,26 +67,66 @@ function Invoke-OpportunitySweep {
   # regardless of definition order. So the seam is these three explicit -MailFetcher/-Sender/
   # -CredResolver scriptblock parameters instead: when supplied, they run in place of the real calls;
   # when omitted, production behaviour (real IMAP, real Telegram, real credential store) is unchanged.
+  # -MailFetcher (when supplied) is now ALSO called with -SinceHours/-MaxMessages so a test can assert
+  # what actually would have reached Get-JobMail; a plain scriptblock with no param() block (every
+  # existing test) simply ignores the extra named arguments (verified empirically) so this is additive.
   param(
-    [datetime]$Now = (Get-Date), [string]$StorePath = '', [int]$SinceHours = 24,
+    [datetime]$Now = (Get-Date), [string]$StorePath = '', [int]$SinceHours = 24, [int]$MaxMessages = 0,
+    [string]$SweepStatePath = '', [string]$HeartbeatPath = '',
     [scriptblock]$MailFetcher = $null,
     [scriptblock]$Sender = $null,
     [scriptblock]$CredResolver = $null
   )
 
+  # IMPORTANT-1 FIX (review): capture the caller's -SinceHours BEFORE either dot-source below runs.
+  # check-job-mail.ps1 and telegram-bot.ps1 are dot-sourced INSIDE this function's body; each declares
+  # its OWN [int]$SinceHours = 24 in its own param() block, and a dot-sourced param() block executes in
+  # the CALLER's scope - so dot-sourcing either one with only -DotSourceOnly (no -SinceHours) silently
+  # resets THIS function's $SinceHours variable back to 24, discarding whatever was actually passed in.
+  # Verified by the reviewer: Probe-SweepPrologue -SinceHours 48 -> SinceHoursAsPassed : 24. Only
+  # $SinceHours collides (both files declare it); $Now/$Sender/$MailFetcher/$CredResolver/$StorePath do
+  # not, which is why the existing test seam kept working even with this bug live. Copying the value to
+  # a name neither dot-sourced file declares, before either dot-source executes, is what survives it.
+  # $PSBoundParameters distinguishes "caller passed -SinceHours explicitly" from "used the 24 default" -
+  # an explicit value (tests; a future manual run) always wins outright; only the unspecified default
+  # case falls through to the CRITICAL-1 gap-sized auto window below.
+  $sinceHoursWasExplicit = $PSBoundParameters.ContainsKey('SinceHours')
+  $callerSinceHours   = $SinceHours
+  $callerMaxMessages  = $MaxMessages
+
   . (Join-Path $BIN 'opportunity-store.ps1') -DotSourceOnly
-  if (-not $StorePath) { $StorePath = Get-OpportunityStorePath }
+  if (-not $StorePath)      { $StorePath      = Get-OpportunityStorePath }
+  if (-not $SweepStatePath) { $SweepStatePath = Get-OpportunitySweepStatePath }
+  if (-not $HeartbeatPath)  { $HeartbeatPath  = Get-OpportunityHeartbeatPath }
   $sent = 0
+  $sweepOk = $false
+  $sweepError = $null
+  $wasCorrupt = $false
 
   try {
     . (Join-Path $BIN 'check-job-mail.ps1') -DotSourceOnly
     . (Join-Path $BIN 'telegram-bot.ps1') -DotSourceOnly
     $cred = if ($CredResolver) { & $CredResolver } else { Get-TelegramCred }
 
-    $res = if ($MailFetcher) { & $MailFetcher } else {
-      Get-JobMail -SinceHours $SinceHours -SenderFilter $JarvisJobSenderFilter -MaxMessages 40 -Mode 'jobs'
+    # CRITICAL-1 FIX (review): when the caller did NOT explicitly pass -SinceHours, size the window to
+    # the ACTUAL gap since the last successful sweep (Get-OpportunitySweepWindowHours, opportunity-
+    # store.ps1) instead of a fixed 24h. Owner works UPS night shifts: laptop closed Friday 18:00,
+    # reopened Monday 09:00 - a fixed-24h catch-up sweep looks back only to Sunday and a Saturday
+    # invite is never fetched, classified or pushed. Not late: never. MaxMessages is scaled to match
+    # (Get-OpportunityMaxMessages) - check-job-mail.ps1 keeps only the newest N ids, so a wider window
+    # with a MaxMessages that stayed fixed would silently drop the oldest messages in a busy inbox,
+    # reopening the same hole one layer down.
+    $effectiveSinceHours = if ($sinceHoursWasExplicit) { $callerSinceHours } else {
+      Get-OpportunitySweepWindowHours -LastSweepAt (Read-OpportunitySweepState -Path $SweepStatePath) -Now $Now
     }
-    $records = @(Read-OpportunityStore -Path $StorePath)
+    $effectiveMaxMessages = if ($callerMaxMessages -gt 0) { $callerMaxMessages } else {
+      Get-OpportunityMaxMessages -SinceHours $effectiveSinceHours
+    }
+
+    $res = if ($MailFetcher) { & $MailFetcher -SinceHours $effectiveSinceHours -MaxMessages $effectiveMaxMessages } else {
+      Get-JobMail -SinceHours $effectiveSinceHours -SenderFilter $JarvisJobSenderFilter -MaxMessages $effectiveMaxMessages -Mode 'jobs'
+    }
+    $records = @(Read-OpportunityStore -Path $StorePath -WasCorrupt ([ref]$wasCorrupt))
 
     foreach ($a in (Select-OpportunityAlerts -Alerts $res.JobAlerts)) {
       $dateStr = if ($a.Date) { "$($a.Date)" } else { $Now.ToString('yyyy-MM-dd') }
@@ -97,7 +150,12 @@ function Invoke-OpportunitySweep {
         # write line, which would put it on disk, sits AFTER the throwing Send-Telegram call and so never
         # runs for it. Disk therefore still lacks that one record, which is exactly what lets it be
         # retried (not silently marked done) next hour, instead of being lost.
-        Write-OpportunityStore -Records $records -Path $StorePath
+        # CRITICAL-2 FIX: skip when the store was corrupt this run. $records is reconstructed from an
+        # EMPTY read in that case (Read-OpportunityStore quarantined the bad file, not merged with it),
+        # so writing it would permanently replace the quarantined original with a small, wrong store -
+        # exactly the erasure this fix exists to stop. The push above still goes out (silence is the
+        # worse failure); only the write is skipped.
+        if (-not $wasCorrupt) { Write-OpportunityStore -Records $records -Path $StorePath }
       }
     }
 
@@ -110,17 +168,39 @@ function Invoke-OpportunitySweep {
         $sent++
         # Same fix as above, applied to reminders: $due is the SAME object reference held inside
         # $records (foreach over an array of PSCustomObject does not copy), so this write also carries
-        # forward every reminder already sent earlier in this same loop.
-        Write-OpportunityStore -Records $records -Path $StorePath
+        # forward every reminder already sent earlier in this same loop. Same CRITICAL-2 skip-on-corrupt.
+        if (-not $wasCorrupt) { Write-OpportunityStore -Records $records -Path $StorePath }
       }
     }
 
-    # Final write is now a no-op in the common case (every state change above already persisted itself)
-    # but is kept as a safety net - e.g. a run where nothing needed a push still re-serializes cleanly.
-    Write-OpportunityStore -Records $records -Path $StorePath
+    if (-not $wasCorrupt) {
+      # Final write is now a no-op in the common case (every state change above already persisted
+      # itself) but is kept as a safety net - e.g. a run where nothing needed a push still re-serializes
+      # cleanly. Skipped entirely when the store was corrupt this run (CRITICAL-2): see above.
+      Write-OpportunityStore -Records $records -Path $StorePath
+      # CRITICAL-1 FIX: persist the last-SUCCESSFUL-sweep timestamp only on the path that reaches here -
+      # mail fetch and processing completed without throwing, AND the store was not corrupt. A sweep
+      # that fails (IMAP down, bad credential) or hit a corrupt store must NOT advance this stamp: the
+      # whole point of gap-sizing is that a failing/degraded run's window keeps GROWING run over run
+      # until one finally succeeds cleanly, rather than resetting to a fresh 24h next hour and
+      # reopening the exact hole Critical 1 closes.
+      Write-OpportunitySweepState -LastSweepAt $Now -Path $SweepStatePath
+      $sweepOk = $true
+    } else {
+      $sweepError = 'opportunity store was corrupt this run; quarantined, sweep window not advanced'
+    }
   } catch {
     Write-Warning "opportunity sweep failed (will retry next hour): $($_.Exception.Message)"
+    $sweepError = $_.Exception.Message
   }
+
+  # IMPORTANT-3 FIX (review): heartbeat every run, success or failure, so a silently-dying sweep (e.g.
+  # an expired Gmail app password) does not read as "healthy" forever just because the hidden wscript
+  # launcher discards Write-Warning and the script still exits 0.
+  $openCount = 0
+  try { $openCount = @(@(Read-OpportunityStore -Path $StorePath) | Where-Object { $_.Status -eq 'open' }).Count } catch { }
+  Write-OpportunityHeartbeat -Path $HeartbeatPath -Ok $sweepOk -ErrorMsg $sweepError -OpenCount $openCount -Now $Now
+
   return $sent
 }
 
