@@ -40,9 +40,20 @@ function Get-OpportunityId {
 }
 
 function Read-OpportunityStore {
-  # Absent, empty or CORRUPT all read as an empty set rather than throwing. A broken store must not
-  # crash the sweep: a lost record is bad, a lost opportunity is worse.
-  param([string]$Path = (Get-OpportunityStorePath))
+  # Absent or empty read as an empty set rather than throwing. A broken store must not crash the
+  # sweep: a lost record is bad, a lost opportunity is worse.
+  #
+  # CRITICAL-2 FIX (review): CORRUPT used to also read as a silent empty set, and the caller then
+  # unconditionally wrote that empty set back over the file - one interrupted write destroyed every
+  # record, and the only signal was a Write-Warning the hidden wscript launcher discards. The spec
+  # (DESIGN-OPPORTUNITY-ALARM.md, vault 12-jarvis, S4) requires "fail loud in the log... a lost record must not become a lost
+  # opportunity." Now a parse failure QUARANTINES the bad file (renamed to <path>.corrupt-<timestamp>,
+  # never deleted) before returning empty, and sets -WasCorrupt so the caller can skip persisting this
+  # run entirely rather than clobbering the quarantined evidence with a reconstructed-from-nothing
+  # store. -WasCorrupt is an OPTIONAL [ref]: existing callers that never pass it see byte-identical
+  # behaviour (empty array on corrupt, same as before this fix).
+  param([string]$Path = (Get-OpportunityStorePath), [ref]$WasCorrupt)
+  if ($WasCorrupt) { $WasCorrupt.Value = $false }
   if (-not (Test-Path $Path)) { return @() }
   try {
     $raw = (Get-Content -LiteralPath $Path -Raw) -replace ('^' + [char]0xFEFF), ''
@@ -57,7 +68,17 @@ function Read-OpportunityStore {
     if ($null -eq $parsed) { return @() }
     return @($parsed)
   } catch {
-    Write-Warning "opportunity store unreadable, treating as empty: $($_.Exception.Message)"
+    Write-Warning "opportunity store unreadable, quarantining and treating as empty: $($_.Exception.Message)"
+    if ($WasCorrupt) { $WasCorrupt.Value = $true }
+    try {
+      $quarantine = "$Path.corrupt-$((Get-Date).ToString('yyyyMMdd-HHmmss'))"
+      Move-Item -LiteralPath $Path -Destination $quarantine -Force
+      Write-Warning "corrupt opportunity store quarantined (not deleted) to $quarantine"
+    } catch {
+      # Quarantining itself must never crash the sweep either - worst case the bad file just sits
+      # there and the next read hits the same catch again.
+      Write-Warning "could not quarantine corrupt opportunity store at $Path : $($_.Exception.Message)"
+    }
     return @()
   }
 }
@@ -72,7 +93,17 @@ function Write-OpportunityStore {
   $dir = Split-Path $Path
   if ($dir -and -not (Test-Path $dir)) { New-Item -ItemType Directory -Force -Path $dir | Out-Null }
   $json = ConvertTo-Json -InputObject @($Records) -Depth 5
-  Set-Content -Encoding UTF8 -LiteralPath $Path -Value $json
+  # CRITICAL-2 FIX (review, atomic write): write to a throwaway temp file first, then Move-Item -Force
+  # onto the real path. A direct Set-Content onto $Path has a window where the file is truncated and
+  # only partially rewritten - an interruption in exactly that window (power loss, a killed process)
+  # is how a store goes corrupt in the first place, which Read-OpportunityStore's quarantine path now
+  # has to clean up after. Move-Item on the same volume is a single filesystem rename: any reader sees
+  # either the fully-old or fully-new file, never a partial one. This also closes the concurrent-read
+  # window against telegram-bot.ps1's poller (Invoke-PollOnce runs on a ~3-minute schedule and can call
+  # Read-OpportunityStore at any time via the clear-opportunity command).
+  $tmpPath = "$Path.tmp-$([guid]::NewGuid().ToString('N'))"
+  Set-Content -Encoding UTF8 -LiteralPath $tmpPath -Value $json
+  Move-Item -LiteralPath $tmpPath -Destination $Path -Force
 }
 
 function Add-Opportunity {
@@ -117,6 +148,87 @@ function Get-OpportunitiesNeedingReminder {
       -not $_.LastPushed -or ([datetime]::Parse($_.LastPushed)).Date -lt $today
     )
   })
+}
+
+# ---------- sweep-window memory (CRITICAL-1 fix) ----------
+# WHY THIS EXISTS. Owner works UPS night shifts - the laptop is closed for long stretches, sometimes a
+# whole weekend. A fixed 24h mail-search window means a catch-up sweep after the laptop reopens only
+# looks back to "yesterday" - anything that arrived the day before that is never fetched, never
+# classified, never pushed. Not late: permanently missed. Persisting WHEN the last sweep last actually
+# succeeded lets the next sweep size its window to the real gap instead.
+
+function Get-OpportunitySweepStatePath { return (Join-Path $HOME '.jarvis\opportunity-sweep-state.json') }
+
+function Read-OpportunitySweepState {
+  # Returns the last successful sweep's timestamp as [datetime], or $null if there is no usable one
+  # (never run before, or the state file is missing/empty/corrupt). Corrupt-as-null is deliberate and
+  # safe here, unlike the opportunity store itself: Get-OpportunitySweepWindowHours treats a null
+  # LastSweepAt as "never swept", which resolves to the CEILING (widest, safest) window - the same
+  # erring-wide-is-safe property the store's id dedupe already gives duplicate pushes.
+  param([string]$Path = (Get-OpportunitySweepStatePath))
+  if (-not (Test-Path $Path)) { return $null }
+  try {
+    $raw = (Get-Content -LiteralPath $Path -Raw) -replace ('^' + [char]0xFEFF), ''
+    if (-not $raw.Trim()) { return $null }
+    $parsed = $raw | ConvertFrom-Json
+    if (-not $parsed -or -not $parsed.lastSweepAt) { return $null }
+    return [datetime]::Parse($parsed.lastSweepAt)
+  } catch { return $null }
+}
+
+function Write-OpportunitySweepState {
+  # Best-effort and atomic (same reasoning as Write-OpportunityStore). Must NEVER throw: a failure to
+  # persist "when did we last sweep" must not take out the sweep that just succeeded.
+  param([datetime]$LastSweepAt, [string]$Path = (Get-OpportunitySweepStatePath))
+  try {
+    $dir = Split-Path $Path
+    if ($dir -and -not (Test-Path $dir)) { New-Item -ItemType Directory -Force -Path $dir | Out-Null }
+    $json = [pscustomobject]@{ lastSweepAt = $LastSweepAt.ToString('s') } | ConvertTo-Json -Compress
+    $tmpPath = "$Path.tmp-$([guid]::NewGuid().ToString('N'))"
+    Set-Content -Encoding UTF8 -LiteralPath $tmpPath -Value $json
+    Move-Item -LiteralPath $tmpPath -Destination $Path -Force
+  } catch { }
+}
+
+function Get-OpportunitySweepWindowHours {
+  # Sizes the mail-search window to the ACTUAL gap since the last successful sweep, instead of a fixed
+  # 24h. Laptop closed Friday 18:00, reopened Monday 09:00: the gap is ~63h, so this returns ~63 (not
+  # 24) - wide enough that check-job-mail.ps1's SEARCH SINCE covers Saturday. The store's id dedupe
+  # (Get-OpportunityId) makes a wide window free of duplicate pushes, so erring wide costs nothing.
+  #   Floor:   never shrink below the original design's minimum coverage, and guards a near-zero or
+  #            negative gap (clock skew, an immediate re-run).
+  #   Ceiling: never grow unbounded from a missing/ancient/corrupt state file - bounds one run to a
+  #            still-generous but finite historical trawl.
+  # NOTE: deliberately NOT typed [Nullable[datetime]] - PowerShell unwraps a non-null argument straight
+  # to a plain [datetime] at the call boundary (verified: .GetType() reports System.DateTime, not the
+  # nullable wrapper), so a later ".Value" on it silently resolves to $null and "$Now - $null" throws
+  # "Cannot find an overload for op_Subtraction". Leaving the parameter untyped accepts both $null and
+  # a real [datetime] without that trap; the cast happens explicitly below instead.
+  param($LastSweepAt, [datetime]$Now, [int]$FloorHours = 24, [int]$CeilingHours = 336)
+  if ($null -eq $LastSweepAt) { return $CeilingHours }
+  $gapHours = [math]::Ceiling(($Now - [datetime]$LastSweepAt).TotalHours)
+  if ($gapHours -lt $FloorHours)   { return $FloorHours }
+  if ($gapHours -gt $CeilingHours) { return $CeilingHours }
+  return [int]$gapHours
+}
+
+# ---------- heartbeat (IMPORTANT-3 fix) ----------
+# Every sweep failure used to be swallowed into a Write-Warning the hidden wscript launcher discards,
+# and the script always exits 0 - so Task Scheduler reports success forever even after (say) the Gmail
+# app password expires and the sweep has gone quiet for good. Same convention as get-bank-data.ps1's
+# Write-BankHeartbeat, surfaced in Get-StatusText (telegram-bot.ps1) alongside the bank heartbeat.
+
+function Get-OpportunityHeartbeatPath { return (Join-Path $HOME '.jarvis\opportunity-heartbeat.json') }
+
+function Write-OpportunityHeartbeat {
+  # Best-effort: a heartbeat write must NEVER affect the sweep's return value or exit-0 contract.
+  param([string]$Path = (Get-OpportunityHeartbeatPath), [bool]$Ok, [string]$ErrorMsg, [int]$OpenCount, [datetime]$Now = (Get-Date))
+  try {
+    $dir = Split-Path $Path
+    if ($dir -and -not (Test-Path $dir)) { New-Item -ItemType Directory -Force -Path $dir | Out-Null }
+    [pscustomobject]@{ asOf = $Now.ToString('s'); ok = $Ok; error = $ErrorMsg; openCount = $OpenCount } |
+      ConvertTo-Json -Compress | Set-Content -Encoding UTF8 -LiteralPath $Path
+  } catch { }
 }
 
 if ($DotSourceOnly) { return }
