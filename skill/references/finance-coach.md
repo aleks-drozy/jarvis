@@ -42,8 +42,9 @@ After any money conversation, update `{{VAULT}}\FINANCE.md`:
 - When `configured:true`: intake starts from the real balance (cite "bank feed, as of <asOf>");
   reconcile with the FINANCE.md Snapshot and flag drift over EUR 20 instead of asking for numbers.
 - Hard rules unchanged: never move money; never record full IBANs or individual transactions in
-  any note - amounts, dates, aggregates only. Setup/renewal (consents expire ~90 days): vault
-  `PHASE3-BANK.md`; renewal is Alex-only (Jarvis never performs bank consent).
+  any note - amounts, dates, aggregates only. Setup/renewal (consents expire ~90 days):
+  `skill/bin/setup-bank.ps1`, run with no switches to print the ordered checklist; renewal is
+  Alex-only (Jarvis never performs bank consent).
 
 ## Debrief line
 The Finance module reads the Snapshot + Budget: report goal pace (ahead/behind for Thailand),

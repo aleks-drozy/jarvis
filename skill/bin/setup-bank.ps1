@@ -2,7 +2,7 @@
 # Phase 3 one-time setup for Enable Banking - RUN BY ALEX in a normal terminal, never headless.
 # Jarvis is not permitted to create accounts or perform bank consent (skill Safety rules); this
 # script only generates a local keypair, prepares credentials/state, and PRINTS the consent link
-# for Alex to open himself. Full checklist: vault 12-jarvis/PHASE3-BANK.md.
+# for Alex to open himself. Run this script with no switches to print the ordered checklist.
 #
 # Usage (in order):
 #   setup-bank.ps1 -GenerateKeypair
@@ -148,7 +148,7 @@ if ($CheckSession) {
   exit 0
 }
 
-Write-Host 'Phase 3 bank feed setup for Enable Banking (see vault 12-jarvis/PHASE3-BANK.md for the full checklist):'
+Write-Host 'Phase 3 bank feed setup for Enable Banking - the full checklist, in order:'
 Write-Host '  1. setup-bank.ps1 -GenerateKeypair'
 Write-Host '  2. Sign up at enablebanking.com, register an application, upload the printed certificate'
 Write-Host '  3. setup-bank.ps1 -StoreCredential -ApplicationId <uuid>'

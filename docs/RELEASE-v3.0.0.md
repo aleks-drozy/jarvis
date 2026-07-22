@@ -285,8 +285,8 @@ of the file that wanted to break it survives.
 
 Stated so nobody has to find them by surprise.
 
-- **CI has not run once per commit.** 9 runs against 122 commits. The workflow triggers on pushes to
-  `master` and on pull requests, and some work landed in batches.
+- **CI has not run once per commit.** 11 runs against 126 commits at this tag. The workflow triggers
+  on pushes to `master` and on pull requests, and some work landed in batches.
 - **The ASCII byte scan covers two files**, `get-bank-data.ps1` and `setup-bank.ps1`, not all 41
   tracked PowerShell scripts. Every tracked `.ps1` and `.vbs` is currently pure ASCII, but the
   enforcement is narrower than the guarantee. Widening it is the next small job.
