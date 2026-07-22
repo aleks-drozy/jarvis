@@ -2,6 +2,7 @@
 # dot-sources telegram-bot.ps1 and exercises the helpers. The self-only lock is the security-critical bit.
 $ErrorActionPreference = 'Stop'
 . "$PSScriptRoot\..\skill\bin\telegram-bot.ps1" -DotSourceOnly
+. "$PSScriptRoot\..\skill\bin\opportunity-store.ps1" -DotSourceOnly
 function Assert($c,$m){ if(-not $c){ Write-Error "FAIL: $m"; exit 1 } }
 
 # --- Resolve-TelegramCommand: only a small whitelist maps to actions; everything else is help ---
@@ -396,5 +397,126 @@ Remove-Item -LiteralPath $mockVault -Recurse -Force -ErrorAction SilentlyContinu
 Remove-Item -LiteralPath $mockOffsetPath -Force -ErrorAction SilentlyContinue
 $VAULT      = $origVault
 $OffsetPath = $origOffsetPath
+
+# --- clearing an opportunity from the phone. Six hex chars, typed one-handed on a night shift. ---
+Assert ((Resolve-TelegramCommand 'done a1b2c3') -eq 'clear-opportunity') "done <id> -> clear-opportunity"
+Assert ((Resolve-TelegramCommand 'ignore a1b2c3') -eq 'clear-opportunity') "ignore <id> -> clear-opportunity"
+Assert ((Resolve-TelegramCommand 'DONE A1B2C3') -eq 'clear-opportunity') "case-insensitive"
+Assert ((Resolve-TelegramCommand '/done a1b2c3') -eq 'clear-opportunity') "leading slash tolerated"
+# ...but 'done' alone is not a clear, and must not swallow ordinary words
+Assert ((Resolve-TelegramCommand 'done') -ne 'clear-opportunity') "bare 'done' is not a clear"
+Assert ((Resolve-TelegramCommand 'done with the gym') -ne 'clear-opportunity') "prose is not a clear"
+
+$p = Get-OpportunityClearPayload 'done a1b2c3'
+Assert ($p.Id -eq 'a1b2c3') "id extracted"
+Assert ($p.Status -eq 'done') "done maps to status done"
+$p2 = Get-OpportunityClearPayload '/IGNORE A1B2C3'
+Assert ($p2.Id -eq 'a1b2c3') "id lowercased for matching"
+Assert ($p2.Status -eq 'ignored') "ignore maps to status ignored"
+
+# =====================================================================================================
+# IMPORTANT 2: two clear-opportunity commands in ONE poll batch must BOTH survive. Before the fix,
+# Select-ActionableUpdates collapsed clear-opportunity like /debrief or /status (keep-the-last-only),
+# but "done a1b2c3" and "ignore ff00aa" are DISTINCT instructions with different ids - collapsing drops
+# one silently, with no reply at all for the dropped one. Reviewer's repro: two clears in one poll
+# batch -> actionable count = 1; control: two notes -> actionable count = 2.
+# =====================================================================================================
+$now2 = Get-Date '2026-07-21T09:00:00'
+$fresh2 = $now2.AddMinutes(-1)
+
+# THE FIX PROVEN: two distinct clears in one batch both survive (this failed before Important 2's fix)
+$b = @( (U 1 'done a1b2c3' $fresh2), (U 2 'ignore ff00aa' $fresh2) )
+$act = @(Select-ActionableUpdates -Updates $b -Now $now2 -MaxAgeMinutes 10)
+Assert ($act.Count -eq 2) "IMPORTANT 2: two clear-opportunity commands in one batch must BOTH survive (one used to be silently dropped), got $($act.Count)"
+Assert (@($act | Where-Object { $_.UpdateId -eq 1 }).Count -eq 1) "IMPORTANT 2: the FIRST clear (done a1b2c3) must survive"
+Assert (@($act | Where-Object { $_.UpdateId -eq 2 }).Count -eq 1) "IMPORTANT 2: the SECOND clear (ignore ff00aa) must survive"
+
+# control: two notes still both survive (unchanged behaviour, same mechanism)
+$bNotes = @( (U 3 'note a' $fresh2), (U 4 'note b' $fresh2) )
+$actNotes = @(Select-ActionableUpdates -Updates $bNotes -Now $now2 -MaxAgeMinutes 10)
+Assert ($actNotes.Count -eq 2) "control: two notes still both survive, got $($actNotes.Count)"
+
+# clear-opportunity does not break the existing collapse: /debrief still collapses in the same batch
+$bMixed = @( (U 5 '/debrief' $fresh2), (U 6 'done a1b2c3' $fresh2), (U 7 '/debrief' $fresh2) )
+$actMixed = @(Select-ActionableUpdates -Updates $bMixed -Now $now2 -MaxAgeMinutes 10)
+Assert ($actMixed.Count -eq 2) "1 collapsed debrief + 1 clear-opportunity, got $($actMixed.Count)"
+Assert (@($actMixed | Where-Object { $_.UpdateId -eq 7 }).Count -eq 1) "the LAST /debrief still wins"
+Assert (@($actMixed | Where-Object { $_.UpdateId -eq 6 }).Count -eq 1) "the clear-opportunity survives alongside the collapsed debrief"
+
+# =====================================================================================================
+# TEST GAP 2 / IMPORTANT 4: Invoke-TelegramCommand -Command 'clear-opportunity' was never invoked by
+# any test before this - only the parser (Resolve-TelegramCommand / Get-OpportunityClearPayload) was.
+# Cover the actual dispatch branch and BOTH reply texts (found / not-found), using the -OpportunityStorePath
+# seam (Important 4) so this never touches the real ~/.jarvis/opportunities.json.
+# =====================================================================================================
+$clearTmp = Join-Path $env:TEMP ('jarvis-telegram-bot-test-clearopp-' + [guid]::NewGuid().ToString('N'))
+New-Item -ItemType Directory -Force -Path $clearTmp | Out-Null
+$clearStore = Join-Path $clearTmp 'opportunities.json'
+
+try {
+  # --- found: a real open record gets marked done, and the reply says so ---
+  $seed = @([pscustomobject]@{ Id='a1b2c3'; From='invite@codesignal.com'; Subject='Your assessment'; Date='2026-07-20'; Status='open'; FirstSeen='2026-07-20T09:00:00'; LastPushed='2026-07-20T09:00:00' })
+  Write-OpportunityStore -Records $seed -Path $clearStore
+
+  Reset-TelegramMocks
+  Invoke-TelegramCommand -Command 'clear-opportunity' -Text 'done a1b2c3' -Cred $mockCred -OpportunityStorePath $clearStore
+  Assert ($script:MockSentMessages.Count -eq 1) "TEST GAP 2 (found/done): exactly one reply sent, got $($script:MockSentMessages.Count)"
+  Assert ($script:MockSentMessages[0].Text -match 'Marked done') "TEST GAP 2 (found/done): reply text confirms it was marked done, got '$($script:MockSentMessages[0].Text)'"
+  Assert ($script:MockSentMessages[0].Text -match 'a1b2c3') "TEST GAP 2 (found/done): reply names the id"
+  $afterDone = @(Read-OpportunityStore -Path $clearStore)
+  Assert ($afterDone[0].Status -eq 'done') "TEST GAP 2 (found/done): the record's status is actually persisted as done, got '$($afterDone[0].Status)'"
+
+  # --- found: 'ignore' on a different open record, reply wording differs ---
+  $seed2 = @([pscustomobject]@{ Id='ff00aa'; From='hr@company.com'; Subject='Offer of employment'; Date='2026-07-20'; Status='open'; FirstSeen='2026-07-20T09:00:00'; LastPushed='2026-07-20T09:00:00' })
+  Write-OpportunityStore -Records $seed2 -Path $clearStore
+
+  Reset-TelegramMocks
+  Invoke-TelegramCommand -Command 'clear-opportunity' -Text 'ignore ff00aa' -Cred $mockCred -OpportunityStorePath $clearStore
+  Assert ($script:MockSentMessages.Count -eq 1) "TEST GAP 2 (found/ignore): exactly one reply sent, got $($script:MockSentMessages.Count)"
+  Assert ($script:MockSentMessages[0].Text -match 'Dropped') "TEST GAP 2 (found/ignore): reply text confirms it was dropped, got '$($script:MockSentMessages[0].Text)'"
+  $afterIgnored = @(Read-OpportunityStore -Path $clearStore)
+  Assert ($afterIgnored[0].Status -eq 'ignored') "TEST GAP 2 (found/ignore): the record's status is actually persisted as ignored, got '$($afterIgnored[0].Status)'"
+
+  # --- not-found: an unknown (but validly-shaped, 6-hex-char) id gets the "no open item" reply, and
+  # --- nothing on disk changes ---
+  Reset-TelegramMocks
+  Invoke-TelegramCommand -Command 'clear-opportunity' -Text 'done 112233' -Cred $mockCred -OpportunityStorePath $clearStore
+  Assert ($script:MockSentMessages.Count -eq 1) "TEST GAP 2 (not-found): exactly one reply sent, got $($script:MockSentMessages.Count)"
+  Assert ($script:MockSentMessages[0].Text -match 'no open item') "TEST GAP 2 (not-found): reply text says there is no such open item, got '$($script:MockSentMessages[0].Text)'"
+  Assert ($script:MockSentMessages[0].Text -match '112233') "TEST GAP 2 (not-found): reply names the unmatched id"
+  $afterNotFound = @(Read-OpportunityStore -Path $clearStore)
+  Assert ($afterNotFound.Count -eq 1 -and $afterNotFound[0].Id -eq 'ff00aa' -and $afterNotFound[0].Status -eq 'ignored') "TEST GAP 2 (not-found): an unmatched clear must not alter any existing record's status, got $($afterNotFound | ConvertTo-Json -Compress)"
+} finally {
+  Remove-Item -LiteralPath $clearTmp -Recurse -Force -ErrorAction SilentlyContinue
+}
+
+# =====================================================================================================
+# IMPORTANT 3: Get-StatusText surfaces the opportunity heartbeat alongside the bank heartbeat. Uses the
+# -OpportunityHeartbeatPath test seam (same idea as -StorePath elsewhere) so this never touches the
+# real ~/.jarvis/opportunity-heartbeat.json.
+# =====================================================================================================
+$statusTmp = Join-Path $env:TEMP ('jarvis-telegram-bot-test-statushb-' + [guid]::NewGuid().ToString('N'))
+New-Item -ItemType Directory -Force -Path $statusTmp | Out-Null
+try {
+  $oppHbMissing = Join-Path $statusTmp 'no-such-heartbeat.json'
+  $statusNoHb = Get-StatusText -OpportunityHeartbeatPath $oppHbMissing
+  Assert ($statusNoHb -notmatch 'Opportunity sweep') "IMPORTANT 3: no mention of the opportunity sweep when no heartbeat file exists yet (first install, before the first run)"
+
+  $oppHbOk = Join-Path $statusTmp 'heartbeat-ok.json'
+  [pscustomobject]@{ asOf = '2026-07-21T09:00:00'; ok = $true; error = $null; openCount = 3 } |
+    ConvertTo-Json -Compress | Set-Content -Encoding UTF8 $oppHbOk
+  $statusOk = Get-StatusText -OpportunityHeartbeatPath $oppHbOk
+  Assert ($statusOk -match 'Opportunity sweep') "IMPORTANT 3: Get-StatusText mentions the opportunity sweep once a heartbeat file exists"
+  Assert ($statusOk -match '3 open') "IMPORTANT 3: Get-StatusText surfaces the open count from a healthy heartbeat, got:`n$statusOk"
+
+  $oppHbErr = Join-Path $statusTmp 'heartbeat-error.json'
+  [pscustomobject]@{ asOf = '2026-07-21T10:00:00'; ok = $false; error = 'simulated IMAP outage'; openCount = 0 } |
+    ConvertTo-Json -Compress | Set-Content -Encoding UTF8 $oppHbErr
+  $statusErr = Get-StatusText -OpportunityHeartbeatPath $oppHbErr
+  Assert ($statusErr -match 'Opportunity sweep') "IMPORTANT 3: Get-StatusText still mentions the opportunity sweep on a failed heartbeat"
+  Assert ($statusErr -match 'error') "IMPORTANT 3: a failed heartbeat must read as an error, not silently as ok - this is the whole point (Task Scheduler must not look healthy forever after a silent failure), got:`n$statusErr"
+} finally {
+  Remove-Item -LiteralPath $statusTmp -Recurse -Force -ErrorAction SilentlyContinue
+}
 
 Write-Host "telegram-bot: ALL PASS"
