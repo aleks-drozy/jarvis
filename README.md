@@ -10,8 +10,8 @@ is watching when it runs, so most of the code is about what happens when somethi
 
 <p align="center"><img src="docs/media/hero.gif" width="820" alt="Asking Jarvis about job applications, by voice"></p>
 <p align="center"><i>"How are my job applications looking?" spoken aloud, transcribed locally by whisper.cpp,
-answered from the real tracker. Full trailer, sound on: <a href="docs/media/trailer.mp4">docs/media/trailer.mp4</a>
-(cold open rendered frame-by-frame from the app's own UI). Raw demo: <a href="docs/media/voice.mp4">voice.mp4</a></i></p>
+answered from the real tracker. Full trailer, sound on: <a href="https://github.com/aleks-drozy/jarvis/releases/download/v3.0.0/trailer.mp4">trailer.mp4</a>
+(cold open rendered frame-by-frame from the app's own UI). Raw demo: <a href="https://github.com/aleks-drozy/jarvis/releases/download/v3.0.0/voice.mp4">voice.mp4</a></i></p>
 
 Built solo by [Aleksandrs Drozdovs](https://www.linkedin.com/in/aleksandrsdrozdovs/),
 CS and Software Engineering graduate (Maynooth University, 2026), Dublin. MIT licensed.
