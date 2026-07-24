@@ -13,7 +13,7 @@ Rough figures are fine. Never push for precision he doesn't have.
 ## The math (show your working, keep it simple)
 - **Emergency buffer first:** if balance < 1 month of costs, priority #1 is building a buffer of
   1 month of costs, then 3 months. Say so plainly.
-- **Thailand goal:** EUR 5,000 by Feb 2027 (from the Life Roadmap). Compute months remaining from
+- **Thailand goal:** EUR 5,000 by Feb 2027 (from the roadmap note, if configured). Compute months remaining from
   today's date; required saving = (5000 - saved_so_far) / months_remaining. State the monthly number.
 - **Monthly budget:** income - fixed costs - goal savings = spending money.
 - **Weekly allowance:** spending money / 4.33, rounded to a clean number. This is the headline —

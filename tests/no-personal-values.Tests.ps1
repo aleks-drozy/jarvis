@@ -22,8 +22,23 @@ try {
     'C:\\Users\\Alex',                     # absolute paths from the maintainer's machine
     'C:/Users/Alex',
     'aleksandrs\.drozdovs2005',            # personal email (any domain spelling)
-    'com\.alexdrozdovs'                    # personal Windows AppUserModelId
+    'com\.alexdrozdovs',                   # personal Windows AppUserModelId
+    '12-jarvis',                           # the maintainer's personal vault folder numbering
+    'claude-memory',                       # the maintainer's personal vault root name
+    'Life Roadmap'                         # the maintainer's personal planning doc
   )
+
+  # Positive control: the scan must actually catch a planted personal value. A guard that
+  # scans and finds nothing proves nothing unless it is first shown finding something.
+  $control = Join-Path $env:TEMP ("npv-control-{0}.txt" -f [guid]::NewGuid())
+  Set-Content -Path $control -Value 'see C:\Users\Alex\secret and 12-jarvis notes' -Encoding ASCII
+  try {
+    $caught = 0
+    foreach ($p in $patterns) {
+      if (Select-String -Path $control -Pattern $p -ErrorAction SilentlyContinue) { $caught++ }
+    }
+    Assert ($caught -ge 2) "positive control: planted personal values must be caught (caught $caught patterns)"
+  } finally { Remove-Item $control -Force -ErrorAction SilentlyContinue }
 
   $hits = New-Object System.Collections.Generic.List[string]
   foreach ($f in $tracked) {

@@ -1045,9 +1045,9 @@ try {
   # subfolder and stays acceptable, so the rule bites the repoint without punishing a normal leaf.
   $vaultRootish = Join-Path $scopeTmp 'vaultroot'
   New-Item -ItemType Directory -Force -Path (Join-Path $vaultRootish '02-something') | Out-Null
-  New-Item -ItemType Directory -Force -Path (Join-Path $vaultRootish '12-jarvis')    | Out-Null
+  New-Item -ItemType Directory -Force -Path (Join-Path $vaultRootish '12-otherproj') | Out-Null
   Assert (-not (Test-ChatScopeNarrow -Path $vaultRootish)) "a directory holding several numbered project folders is a vault ROOT, not one project's notes - it must be refused"
-  Assert (Test-ChatScopeNarrow -Path (Join-Path $vaultRootish '12-jarvis')) "the numbered project folder itself is the narrow leaf and must remain acceptable"
+  Assert (Test-ChatScopeNarrow -Path (Join-Path $vaultRootish '12-otherproj')) "the numbered project folder itself is the narrow leaf and must remain acceptable"
   $oneNumbered = Join-Path $scopeTmp 'oneonly'
   New-Item -ItemType Directory -Force -Path (Join-Path $oneNumbered '01-notes') | Out-Null
   Assert (Test-ChatScopeNarrow -Path $oneNumbered) "a single numbered subfolder is not a vault root and must not be refused"
