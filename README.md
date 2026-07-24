@@ -396,10 +396,11 @@ machine path, my email or my app id lands in tracked source. It also asserts the
 **What it does not cover, stated plainly:** it exempts `docs/`, `PRIVACY.md`, `TERMS.md` and itself.
 My name appears in `LICENSE`, `PRIVACY.md` and `TERMS.md` by design (copyright and legal notices), and
 my contact email appears in `PRIVACY.md` and `TERMS.md` by design; `LICENSE` carries the name only, no
-email. The guard hunts four literal patterns, so it does not currently catch my vault's folder naming,
-which is still hardcoded in a few places in `skill/`. The honest claim is: **no executable source
-hardcodes my machine paths**, the installer renders `{{VAULT}}`-style placeholders, and the guard fails
-the build if that changes.
+email. The guard hunts seven literal patterns, including my vault's folder naming and the name of my
+personal planning doc, and a positive control plants a personal value in a scratch file first so a
+zero-hit run is proven to mean "found nothing," not "found nothing because the scan is broken."
+The honest claim is: **no executable source hardcodes my machine paths**, the installer renders
+`{{VAULT}}`-style placeholders, and the guard fails the build if that changes.
 
 ---
 

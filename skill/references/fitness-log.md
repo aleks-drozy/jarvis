@@ -13,7 +13,7 @@ From "log judo 90 min" / "trained legs today, felt wrecked" / "weighed 66.1 this
 5. Bodyweight — only if he mentioned one.
 Don't interrogate. One session logged with just a type is fine; ask at most one light follow-up.
 
-## Write it down (you, not Alex — 12-jarvis only, Safety 7)
+## Write it down (you, not the owner — vault only, Safety 7)
 Update `{{VAULT}}\FITNESS.md`:
 - Append one dated row to **Session log** (Date | Type | Focus | Duration | Felt). Remove the
   "_(awaiting your first logged session)_" placeholder row on the first real entry.
