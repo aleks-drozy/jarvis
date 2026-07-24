@@ -315,13 +315,13 @@ single-instance lock makes running it either way safe.
 
 ## Tests, and what they actually guarantee
 
-25 suites: 24 native PowerShell suites (`tests/*.Tests.ps1`, including the shim below, 3,374 lines) and
+25 suites: 24 native PowerShell suites (`tests/*.Tests.ps1`, including the shim below, 3,762 lines) and
 one Node suite ([`tests/livestate.node.js`](https://github.com/aleks-drozy/jarvis/blob/master/tests/livestate.node.js), 92 lines).
 `tests/livestate.Tests.ps1` is a 6-line shim that only shells out to the Node suite so the
 PowerShell-child CI harness below can invoke it too - it is still counted among the 24, because it is
 its own `tests/*.Tests.ps1` file with its own `ALL PASS` line, even though the assertions it triggers
-live in the Node file. (3,466 is the combined PowerShell-plus-Node line count.) No framework, no
-Pester. Each real suite defines its own `Assert` and prints `<name>: ALL PASS`. 782 `Assert` call sites
+live in the Node file. (3,854 is the combined PowerShell-plus-Node line count.) No framework, no
+Pester. Each real suite defines its own `Assert` and prints `<name>: ALL PASS`. 787 `Assert` call sites
 across the suites, and more at runtime because 40 `foreach` loops re-run assertions over parameter
 tables.
 

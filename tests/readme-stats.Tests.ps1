@@ -14,7 +14,7 @@ $suiteFiles = Get-ChildItem (Join-Path $repo 'tests') -Filter *.Tests.ps1
 $psSuiteCount = $suiteFiles.Count
 $assertCount = (Select-String -Path (Join-Path $repo 'tests\*.Tests.ps1') -Pattern '\bAssert\s*\(' -AllMatches |
   ForEach-Object { $_.Matches.Count } | Measure-Object -Sum).Sum
-$lineCount = (Get-Content (Join-Path $repo 'tests\*.Tests.ps1') | Measure-Object -Line).Lines
+$lineCount = (Get-Content (Join-Path $repo 'tests\*.Tests.ps1')).Count
 
 # --- claim 1: "N suites: M native PowerShell" ---
 Assert ($readme -match '(\d+) suites: (\d+) native PowerShell') "README must state the suite count in the pinned phrasing"
