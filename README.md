@@ -1,5 +1,7 @@
 # Jarvis
 
+[![tests](https://github.com/aleks-drozy/jarvis/actions/workflows/tests.yml/badge.svg)](https://github.com/aleks-drozy/jarvis/actions/workflows/tests.yml)
+
 **A personal automation system that runs unattended on Windows.** Three scheduled tasks, a
 read-only PSD2 open-banking feed, local speech-to-text, and a self-only Telegram bridge, wired
 to a Claude Code agent skill. At 08:30 every morning it assembles a briefing from my repos, my
