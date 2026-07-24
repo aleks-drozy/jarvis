@@ -38,9 +38,9 @@ If you are skimming, these are the parts that are not a weekend of prompting.
    suites have shipped since; 21 today), because a comment quoting that line satisfied the assertion.
    The repair strips comments with PowerShell's own tokenizer and ships eleven positive controls
    proving the stripper actually runs.
-5. **[It has run every day since the first commit](#does-it-actually-run).** 126 commits in the 15
-   days to `v3.0.0` (2026-07-08 to 2026-07-22), four registered Windows scheduled tasks, 21 test
-   suites, every CI run green so far (11 of 11), gitleaks over the full history.
+5. **[It has run every day since the first commit](#does-it-actually-run).** 126 commits to `v3.0.0`
+   in 15 days (2026-07-08 to 2026-07-22), four registered Windows scheduled tasks, 25 test suites,
+   every CI run to `v3.0.0` green (11 of 11), gitleaks over the full history.
 
 ## Architecture
 
@@ -315,14 +315,15 @@ single-instance lock makes running it either way safe.
 
 ## Tests, and what they actually guarantee
 
-21 suites: 20 native PowerShell suites (`tests/*.Tests.ps1` excluding the shim below, 3,615 lines) and
+25 suites: 24 native PowerShell suites (`tests/*.Tests.ps1`, including the shim below, 3,374 lines) and
 one Node suite ([`tests/livestate.node.js`](https://github.com/aleks-drozy/jarvis/blob/master/tests/livestate.node.js), 92 lines).
 `tests/livestate.Tests.ps1` is a 6-line shim that only shells out to the Node suite so the
-PowerShell-child CI harness below can invoke it too - it is not a distinct suite, and counting it
-separately would double-count livestate. (3,713 is the combined PowerShell-plus-Node line count, not
-the PowerShell-only figure it looked like.) No framework, no Pester. Each real suite defines its own
-`Assert` and prints `<name>: ALL PASS`. 722 assertions at statement level, and more at runtime because
-40 `foreach` loops re-run assertions over parameter tables.
+PowerShell-child CI harness below can invoke it too - it is still counted among the 24, because it is
+its own `tests/*.Tests.ps1` file with its own `ALL PASS` line, even though the assertions it triggers
+live in the Node file. (3,466 is the combined PowerShell-plus-Node line count.) No framework, no
+Pester. Each real suite defines its own `Assert` and prints `<name>: ALL PASS`. 782 `Assert` call sites
+across the suites, and more at runtime because 40 `foreach` loops re-run assertions over parameter
+tables.
 
 **CI** (`.github/workflows/tests.yml`) runs on every push to `master` and on every pull request. Two
 jobs:
