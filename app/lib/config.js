@@ -16,6 +16,7 @@ const DEFAULTS = {
   owner_email:    '',
   app_id:         'com.jarvis.assistant',
   roadmap_index:  '',
+  app_dir:        '',
 };
 
 function loadConfig(configPath) {

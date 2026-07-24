@@ -29,6 +29,7 @@ function Get-JarvisConfigDefaults {
     owner_email    = ''                                         # self-only lock target; EMPTY = refuse all sends
     app_id         = 'com.jarvis.assistant'                     # Windows AppUserModelId for notifications
     roadmap_index  = ''                                         # optional: a personal roadmap note the dashboard may show; empty = feature off
+    app_dir        = ''                                         # repo app/ dir for the optional logon autostart; empty = not set
   }
 }
 

@@ -2,7 +2,7 @@
 
 [![tests](https://github.com/aleks-drozy/jarvis/actions/workflows/tests.yml/badge.svg)](https://github.com/aleks-drozy/jarvis/actions/workflows/tests.yml)
 
-**A personal automation system that runs unattended on Windows.** Three scheduled tasks, a
+**A personal automation system that runs unattended on Windows.** Four scheduled tasks, a
 read-only PSD2 open-banking feed, local speech-to-text, and a self-only Telegram bridge, wired
 to a Claude Code agent skill. At 08:30 every morning it assembles a briefing from my repos, my
 inbox, my calendar and my bank, writes it to a Markdown vault, and pushes it to my phone. Nobody
@@ -39,7 +39,7 @@ If you are skimming, these are the parts that are not a weekend of prompting.
    The repair strips comments with PowerShell's own tokenizer and ships eleven positive controls
    proving the stripper actually runs.
 5. **[It has run every day since the first commit](#does-it-actually-run).** 126 commits in the 15
-   days to `v3.0.0` (2026-07-08 to 2026-07-22), three registered Windows scheduled tasks, 21 test
+   days to `v3.0.0` (2026-07-08 to 2026-07-22), four registered Windows scheduled tasks, 21 test
    suites, every CI run green so far (11 of 11), gitleaks over the full history.
 
 ## Architecture
@@ -75,7 +75,7 @@ check-opportunities.ps1 --> sweeps job mail for OPEN DOORS only (assessment, int
         |                   pushes an alarm, re-reminds daily until cleared from the phone
         +-- opportunity-store.ps1      persistence, id-seed hashing, corrupt-store recovery
 
-Electron companion (app/, launched by hand, not scheduled)
+Electron companion (app/, optional logon-scheduled autostart, or launched by hand)
         tray + always-resident orb + Summon HUD + dashboard
         Ctrl+Shift+Space -> local whisper.cpp STT -> same chat pipeline -> edge-tts voice out
 ```
@@ -306,8 +306,10 @@ Electron hardening: `contextIsolation: true` on all four windows, `nodeIntegrati
 dashboard, a hand-listed `contextBridge` invoke surface with no raw node, and a permission handler
 that grants `media` and nothing else.
 
-The app is launched by hand (`npm start`), not by a scheduled task. That is the one part of this
-system that is on demand rather than automated, and it should not be described otherwise.
+The app can be registered as a fourth, logon-triggered scheduled task via
+`scripts/register-app-autostart.ps1`, exactly like the other three (opt-in, nothing on by
+default). Launching it by hand (`npm start`) remains fully supported — the app's own
+single-instance lock makes running it either way safe.
 
 ---
 
@@ -406,9 +408,11 @@ The honest claim is: **no executable source hardcodes my machine paths**, the in
 
 ## Does it actually run
 
-- **Three registered Windows scheduled tasks**: the 08:30 debrief, a 3-minute Telegram poller, and an
-  hourly opportunity sweep. Each leaves a dated, checkable trace on every run rather than a
-  point-in-time scheduler status that flips between one query and the next.
+- **Four registered Windows scheduled tasks**: the 08:30 debrief, a 3-minute Telegram poller, an
+  hourly opportunity sweep, and the desktop app at logon. The first three each leave a dated,
+  checkable trace file on every run rather than a point-in-time scheduler status that flips
+  between one query and the next; the fourth is checkable the same way any registered task is,
+  through Windows' own scheduled-task run history (`Get-ScheduledTaskInfo`).
 - **A dated briefing note for every day since the first commit**, with no gaps. Fair warning: those
   notes live in a private vault outside this repo, so you cannot verify that from here. The
   scheduled-task definitions and the heartbeat-writing code are in the repo and you can read those.
