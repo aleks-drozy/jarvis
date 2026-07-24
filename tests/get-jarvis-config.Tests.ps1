@@ -63,6 +63,33 @@ try {
   Assert ($parsed.v -eq 'D:\SomeVault\jarvis') "node loader reads the same file (vault)"
   Assert ($parsed.o -eq 'owner@example.com') "node loader reads the same file (email)"
   Assert ($parsed.a -eq 'com.jarvis.assistant') "node loader falls back to the SAME generic app_id default"
+
+  # 6b) FULL default-key-set parity: the 3 spot-checks above only prove those 3 keys match. A key
+  #     added to only ONE loader would slip past them silently. Compare the ENTIRE default object -
+  #     same key names, same count, same values - so drift on any key (not just the 3 sampled ones)
+  #     fails loudly and names the offending key. This is what makes the README's "cannot drift
+  #     apart" claim (around line 440) true rather than aspirational.
+  $psDefaults = Get-JarvisConfigDefaults | ConvertTo-Json | ConvertFrom-Json
+  $missingFile = Join-Path $tmpDir ("missing-" + [Guid]::NewGuid().ToString('N') + '.json')
+  Assert (-not (Test-Path $missingFile)) "full parity fixture path must not exist, got an existing path '$missingFile'"
+  $jsFull = "const c=require(process.argv[1])(process.argv[2]); console.log(JSON.stringify(c));"
+  $jsOut = & node -e $jsFull "$repo\app\lib\config.js" $missingFile
+  $jsDefaults = $jsOut | ConvertFrom-Json
+
+  $psKeys = @($psDefaults.PSObject.Properties.Name | Sort-Object)
+  $jsKeys = @($jsDefaults.PSObject.Properties.Name | Sort-Object)
+  Assert ($psKeys.Count -eq $jsKeys.Count) "full parity: key COUNT differs - PS (Get-JarvisConfigDefaults) has $($psKeys.Count) keys [$($psKeys -join ', ')], JS (config.js DEFAULTS) has $($jsKeys.Count) keys [$($jsKeys -join ', ')]"
+  $onlyInPs = @($psKeys | Where-Object { $jsKeys -notcontains $_ })
+  $onlyInJs = @($jsKeys | Where-Object { $psKeys -notcontains $_ })
+  Assert ($onlyInPs.Count -eq 0) "full parity: key(s) present in PS defaults but missing from JS defaults: $($onlyInPs -join ', ')"
+  Assert ($onlyInJs.Count -eq 0) "full parity: key(s) present in JS defaults but missing from PS defaults: $($onlyInJs -join ', ')"
+
+  foreach ($key in $psKeys) {
+    $psVal = "$($psDefaults.$key)"
+    $jsVal = "$($jsDefaults.$key)"
+    Assert ($psVal -eq $jsVal) "full parity: default value for key '$key' differs - PS='$psVal' JS='$jsVal'"
+  }
+
   # corrupt file must throw in node too
   Set-Content -Encoding ASCII $file 'nope {'
   $out2 = cmd /c "node -e `"try{require(process.argv[1])(process.argv[2]);console.log('NOTHREW')}catch(e){console.log('THREW')}`" `"$repo\app\lib\config.js`" `"$file`" 2>&1"
