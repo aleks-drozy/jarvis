@@ -138,13 +138,8 @@ foreach ($f in @("$PSScriptRoot\..\skill\bin\get-bank-data.ps1", "$PSScriptRoot\
   Assert (-not (($codeLines -join "`n") -match '/payments')) "$(Split-Path $f -Leaf) must never call the /payments endpoint in code (read-only guarantee)"
 }
 
-# 9. Repo battle scar: new .ps1 files must be pure ASCII.
-foreach ($f in @("$PSScriptRoot\..\skill\bin\get-bank-data.ps1", "$PSScriptRoot\..\skill\bin\setup-bank.ps1")) {
-  Assert (Test-Path $f) "$f must exist"
-  $bytes = [IO.File]::ReadAllBytes($f)
-  $bad = 0; for ($i=0; $i -lt $bytes.Length; $i++){ if ($bytes[$i] -gt 127){ $bad++ } }
-  Assert ($bad -eq 0) "$(Split-Path $f -Leaf) must be pure ASCII (found $bad non-ASCII bytes)"
-}
+# 9. (moved) The ASCII purity scan is now repo-wide: tests/ascii-purity.Tests.ps1 covers every
+# tracked .ps1/.vbs, including the two bank scripts that were its original scope.
 
 # 10. Consent-date helper (setup-bank.ps1): the app needs a YYYY-MM-DD from the ISO valid_until.
 . "$PSScriptRoot\..\skill\bin\setup-bank.ps1" -DotSourceOnly 2>$null
