@@ -138,9 +138,8 @@ briefing now stamps itself with the cause, derived from `Win32_OperatingSystem.L
 ### The rest of the scar tissue
 
 - **PowerShell 5.1 reads `.ps1` as ANSI.** One em dash in a string broke the whole parser. Every
-  tracked `.ps1` and `.vbs` is pure ASCII. Honest scope note: the byte scan that enforces this
-  currently covers `get-bank-data.ps1` and `setup-bank.ps1` only, so it is a spot check rather than
-  a repo-wide gate.
+  tracked `.ps1` and `.vbs` is pure ASCII, enforced repo-wide by
+  [`tests/ascii-purity.Tests.ps1`](tests/ascii-purity.Tests.ps1).
 - **`ConvertTo-Json` unwraps single-element arrays.** `Commits` serialized as three different shapes
   depending on how many there were. Wrapped with `@()` and locked with a test.
 - **The 08:30 briefing silently skipped a morning.** The laptop was asleep, and Task Scheduler's
