@@ -60,8 +60,18 @@ try {
     if ($dir) { Set-Location -LiteralPath $dir -ErrorAction Stop }
     (Get-Location).Path
   }
-  Assert ($cwdResult.TrimEnd('\') -ieq $testDir.TrimEnd('\')) `
-    "Invoke-ClaudeGeneration must forward -WorkingDirectory into the job so a pinning JobScript actually lands in it (got: $cwdResult, want: $testDir)"
+  # Compare against $testDir resolved through the SAME Set-Location/Get-Location round-trip the job
+  # itself does, not the raw $env:TEMP-built string. On some hosts (observed on the GitHub Actions
+  # Windows runner, account "runneradmin") $env:TEMP is reported in 8.3 short-path form
+  # (...\RUNNER~1\...) while Set-Location + Get-Location resolves and returns the long form
+  # (...\runneradmin\...) for the identical real directory - a representation mismatch, not a
+  # pinning failure. Round-tripping both sides through Set-Location neutralizes that regardless of
+  # which form any given host's TEMP happens to use.
+  Push-Location -LiteralPath $testDir
+  $testDirResolved = (Get-Location).Path
+  Pop-Location
+  Assert ($cwdResult.TrimEnd('\') -ieq $testDirResolved.TrimEnd('\')) `
+    "Invoke-ClaudeGeneration must forward -WorkingDirectory into the job so a pinning JobScript actually lands in it (got: $cwdResult, want: $testDirResolved)"
 } finally {
   Remove-Item $testDir -Recurse -Force -ErrorAction SilentlyContinue
 }
