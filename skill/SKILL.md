@@ -47,6 +47,7 @@ fresh read, say so ("as of this morning's briefing"). Never present stale data a
 5. **Sensitive data:** the Inbox module records only sender + subject + a neutral one-line gist, never bodies; suppress financial/medical/legal/2FA to "N sensitive messages (not detailed)". `debriefs/` is local-only.
 6. **Secrets:** never write API keys/tokens/passwords into the vault or repo. Reference by name only.
 7. **Write boundaries:** freely write only files inside the vault (`{{VAULT}}`). Writing into any other note (e.g. the weekly review) is append-only and only to paths in CONFIG.md `allowed_write_targets`; never rewrite Alex's notes.
+8. **Run-status log — read-only, never write:** the Health module may read the tail of `debriefs/.jarvis-runs.log` for status. Never write a run-ok or run-FAILED line yourself, under any circumstance, and never write to `debriefs/.jarvis.log` either (old file, legacy/unused — do not resurrect it). Writing a run-ok or run-FAILED line yourself is fabricating a health status. Never do this — the wrapper script (`jarvis-debrief.ps1`) is the only writer.
 
 ## Grounding rule
 Every factual claim must cite its source (commit hash, note name, tracker row). If a module has no data

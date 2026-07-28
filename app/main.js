@@ -19,6 +19,8 @@ const { sendChat, prewarm } = require('./lib/chat');
 const { transcribe, sttAvailable, sttDiagnosis } = require('./lib/stt');
 const LS = require('./lib/livestate');
 const BANK_HEARTBEAT = path.join(process.env.USERPROFILE, '.jarvis', 'bank-heartbeat.json');
+// F3: written by skill/bin/jarvis-debrief.ps1 ONLY after a channel send returns successfully.
+const DEBRIEF_HEARTBEAT = path.join(process.env.USERPROFILE, '.jarvis', 'debrief-heartbeat.json');
 const CONFIG_MD = path.join(VAULT, 'CONFIG.md');
 
 let tray = null;
@@ -33,6 +35,7 @@ let liveState = {
   scheduler: { registered: null, enabled: null, state: null, nextRun: null, lastRun: null, lastResult: null, lastRunLate: false, running: false, stalled: false },
   bank: { enabled: false, configured: false, ok: null, error: null, lastFetch: null, consentExpires: null },
   chat: { inFlight: false },
+  heartbeat: null,   // { date, channel, sentAt } from debrief-heartbeat.json, or null if never seen
   ledgerOpenCount: 0,
   health: 'unknown',
 };
@@ -82,6 +85,19 @@ function refreshBank() {
   } catch {
     liveState.bank.configured = false;
     liveState.bank.ok = null; liveState.bank.error = null; liveState.bank.lastFetch = null; liveState.bank.consentExpires = null;
+  }
+  pushLive();
+}
+
+// F3: read-only. The heartbeat file is written exclusively by jarvis-debrief.ps1's own success
+// path; a missing/unparseable file just means "no confirmed send seen yet" (liveState.heartbeat
+// stays null), which LS.heartbeatStale() treats as unknown rather than amber.
+function refreshHeartbeat() {
+  try {
+    const h = JSON.parse(fs.readFileSync(DEBRIEF_HEARTBEAT, 'utf8').replace(/^﻿/, ''));
+    liveState.heartbeat = { date: h.date || null, channel: h.channel || null, sentAt: h.sentAt || null };
+  } catch {
+    liveState.heartbeat = null;
   }
   pushLive();
 }
@@ -319,7 +335,9 @@ async function handleSpeech(wavBuf) {
 // ---------- watchers ----------
 function refreshSchedulerFromLog() {
   try {
-    const logPath = path.join(VAULT, 'debriefs', '.jarvis.log');
+    // F1: the script's own private run-status channel - the Claude subagent invoked by
+    // jarvis-debrief.ps1 is never told this filename and never writes to it (read-only here).
+    const logPath = path.join(VAULT, 'debriefs', '.jarvis-runs.log');
     const lines = fs.readFileSync(logPath, 'utf8').trim().split('\n').slice(-10);
     Object.assign(liveState.scheduler, LS.parseLogTail(lines, new Date()));
   } catch {}
@@ -342,11 +360,11 @@ function startWatchers() {
       }
     } catch {}
   });
-  // failure alarm: tail .jarvis.log for FAILED lines
-  const log = path.join(debriefDir, '.jarvis.log');
+  // failure alarm: tail .jarvis-runs.log for FAILED lines (the wrapper's own private channel - F1)
+  const log = path.join(debriefDir, '.jarvis-runs.log');
   let lastSize = fs.existsSync(log) ? fs.statSync(log).size : 0;
   fs.watch(path.dirname(log), (_e, f) => {
-    if (f !== '.jarvis.log' || !fs.existsSync(log)) return;
+    if (f !== '.jarvis-runs.log' || !fs.existsSync(log)) return;
     try {
       const size = fs.statSync(log).size;
       if (size > lastSize) {
@@ -359,6 +377,15 @@ function startWatchers() {
     } catch {}
   });
   refreshSchedulerFromLog();
+  // F3: also watch the heartbeat file directly - a re-send doesn't necessarily append to the log
+  // watcher above at the same moment, so poll it on its own filesystem event too. Best-effort: the
+  // ~/.jarvis directory may not exist yet on a fresh install.
+  try {
+    fs.watch(path.dirname(DEBRIEF_HEARTBEAT), (_e, f) => {
+      if (f && path.basename(DEBRIEF_HEARTBEAT) === f) refreshHeartbeat();
+    });
+  } catch {}
+  refreshHeartbeat();
 }
 
 // ---------- IPC ----------
