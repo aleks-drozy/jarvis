@@ -64,9 +64,20 @@ function parseLogTail(lines, now) {
   const startRow = rows[startIdx];
   let terminator = null;
   let anyRowAfterStart = false;
+  // Pre-merge review of 6e2a148: trust the tail's PHYSICAL (append) order here, not a wall-clock
+  // comparison. .jarvis-runs.log is written by a single sequential Add-Content writer (see
+  // jarvis-debrief.ps1), so any row at a LATER INDEX than the most recent "run start" was genuinely
+  // appended after it, even if its own timestamp happens to read earlier due to clock skew (this
+  // machine has documented real RTC-wake-timer/hibernation clock issues - see
+  // scripts/register-task.ps1). A prior version of this loop did `if (r.ms < startRow.ms) continue`
+  // BEFORE setting anyRowAfterStart, which silently treated an earlier-timestamped but otherwise
+  // well-formed terminator (a genuine "run ok (..., via telegram)" or "run FAILED") as if it had
+  // never existed - reporting a run that had already completed, successfully or not, as still
+  // "running" (or eventually "stalled") instead. Position in the tail is the ground truth for
+  // "did something happen after this start"; wall-clock ms is still used below purely to measure
+  // elapsed time for the still-running/stalled distinction, where there is no terminator to anchor to.
   for (let i = startIdx + 1; i < rows.length; i++) {
     const r = rows[i];
-    if (r.ms < startRow.ms) continue;   // must be timestamped AFTER the start
     anyRowAfterStart = true;
     if (r.type === 'failed' || (r.type === 'ok' && r.hasVia)) terminator = r;
   }

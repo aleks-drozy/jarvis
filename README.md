@@ -34,8 +34,9 @@ If you are skimming, these are the parts that are not a weekend of prompting.
    `Bash Write Edit WebFetch WebSearch` explicitly denied. A structural test fails the build the day
    someone widens that list.
 4. **[Tests that are hardened against passing for the wrong reason](#tests-that-test-their-own-instrumentation).**
-   I deleted a load-bearing line of code and all 18 suites then in the repo stayed green (three more
-   suites have shipped since; 21 today), because a comment quoting that line satisfied the assertion.
+   I deleted a load-bearing line of code and all 18 suites then in the repo stayed green (many more
+   have shipped since - see [Tests, and what they actually guarantee](#tests-and-what-they-actually-guarantee)
+   below for the exact, CI-recounted total), because a comment quoting that line satisfied the assertion.
    The repair strips comments with PowerShell's own tokenizer and ships eleven positive controls
    proving the stripper actually runs.
 5. **[It has run every day since the first commit](#does-it-actually-run).** 126 commits to `v3.0.0`
@@ -315,13 +316,13 @@ single-instance lock makes running it either way safe.
 
 ## Tests, and what they actually guarantee
 
-32 suites: 31 native PowerShell suites (`tests/*.Tests.ps1`, including the shim below, 4,118 lines) and
-one Node suite ([`tests/livestate.node.js`](https://github.com/aleks-drozy/jarvis/blob/master/tests/livestate.node.js), 191 lines).
+33 suites: 32 native PowerShell suites (`tests/*.Tests.ps1`, including the shim below, 4,310 lines) and
+one Node suite ([`tests/livestate.node.js`](https://github.com/aleks-drozy/jarvis/blob/master/tests/livestate.node.js), 219 lines).
 `tests/livestate.Tests.ps1` is a 6-line shim that only shells out to the Node suite so the
-PowerShell-child CI harness below can invoke it too - it is still counted among the 31, because it is
+PowerShell-child CI harness below can invoke it too - it is still counted among the 32, because it is
 its own `tests/*.Tests.ps1` file with its own `ALL PASS` line, even though the assertions it triggers
-live in the Node file. (4,309 is the combined PowerShell-plus-Node line count.) No framework, no
-Pester. Each real suite defines its own `Assert` and prints `<name>: ALL PASS`. 846 `Assert` call sites
+live in the Node file. (4,529 is the combined PowerShell-plus-Node line count.) No framework, no
+Pester. Each real suite defines its own `Assert` and prints `<name>: ALL PASS`. 870 `Assert` call sites
 across the suites, and more at runtime because 45 `foreach` loops re-run assertions over parameter
 tables.
 

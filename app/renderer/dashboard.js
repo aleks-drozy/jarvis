@@ -113,6 +113,26 @@ function daysLeft(dateStr) {
 }
 const PILL = { busy:['Working…','busy'], grey:['Off duty','grey'], amber:['Attention','amber'], unknown:['Status unknown','unknown'], normal:['On duty','normal'] };
 
+// Pre-merge review of 6e2a148: deriveHealth() (app/lib/livestate.js) can flip the pill to 'amber'
+// purely because debrief-heartbeat.json (F3) is stale, past 09:00 - but every OTHER field on this
+// tab (lastRun, runningNow, bankFeed) can look completely normal on that exact morning (the log line
+// looked fine, nothing is stalled, the bank feed is healthy). Before this, the tray tooltip alone
+// explained that cause (LS.tooltipFor already branches on it); the dashboard - the surface whose own
+// purpose is to spell out WHY the pill is what it is - had no field for it at all. Mirrors
+// LS.heartbeatStale()'s own rule (stale only after 09:00 local, and only when a heartbeat exists at
+// all) so this never contradicts the tray/health-derivation logic it is describing.
+function heartbeatIsStale(hb) {
+  if (!hb || !hb.date) return false;
+  const now = new Date();
+  if (now.getHours() < 9) return false;
+  const y = now.getFullYear(), m = String(now.getMonth() + 1).padStart(2, '0'), d = String(now.getDate()).padStart(2, '0');
+  return hb.date !== `${y}-${m}-${d}`;
+}
+function heartbeatText(hb) {
+  if (!hb || !hb.date) return 'not confirmed yet';
+  return fmtStamp(hb.sentAt || hb.date) + (hb.channel ? ' via ' + hb.channel : '');
+}
+
 function renderLive(s) {
   if (!s) return;
   const [label, cls] = PILL[s.health] || PILL.normal;
@@ -128,6 +148,10 @@ function renderLive(s) {
   $('runningNow').textContent = (s.chat && s.chat.inFlight) ? 'answering you…'
     : (sc.running ? 'debrief running…' : (sc.stalled ? 'a run may have stalled' : 'idle'));
   $('runningNow').className = ((s.chat && s.chat.inFlight) || sc.running) ? 'live' : '';
+
+  const hb = s.heartbeat;
+  $('debriefHeartbeat').textContent = heartbeatText(hb);
+  $('debriefHeartbeat').className = heartbeatIsStale(hb) ? 'warn' : '';
 
   const b = s.bank || {};
   if (!b.enabled) { $('bankFeed').textContent = 'off'; $('bankFeed').className = ''; }

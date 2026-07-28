@@ -168,6 +168,34 @@ ok(/consent/.test(LS.tooltipFor({ scheduler: { registered: true, enabled: true, 
   ok(r.lastResult === 'ok', 'a real via-bearing ok still wins even with a later forged ok appended');
 })();
 
+// Pre-merge review of 6e2a148: a genuine, well-formed terminator (ok-with-via, or FAILED) must still
+// count even when its OWN timestamp reads slightly EARLIER than the "run start" line's timestamp -
+// clock skew, not a sign the terminator doesn't belong to this run. .jarvis-runs.log is a single
+// sequential Add-Content writer, so physical position in the tail (not wall-clock ms) is what proves
+// "this happened after start". This machine has documented real RTC-wake-timer/hibernation clock
+// issues, so this is not a purely theoretical scenario.
+(() => {
+  const NOW2 = new Date('2026-07-28T08:35:00');
+  // terminator timestamped ONE MINUTE BEFORE its own run-start line, despite being physically later
+  // in the tail (i.e. the real script wrote "run start" then, on a clock that had jumped backward,
+  // wrote the "run ok" terminator).
+  let r = LS.parseLogTail(
+    ['2026-07-28T08:30:00 run start', '2026-07-28T08:29:00 run ok (note written 08:29, via telegram)'],
+    NOW2);
+  ok(r.lastResult === 'ok', 'a real ok-with-via terminator timestamped BEFORE its own start line (clock skew) must still count as ok');
+  ok(r.running === false, 'a clock-skewed but genuine terminator must not read as still running');
+  ok(r.stalled === false, 'a clock-skewed but genuine terminator must not read as stalled');
+  ok(LS.deriveHealth({ scheduler: r, bank: {}, chat: {} }, NOW2) !== 'amber', 'a clock-skewed but genuine ok is not amber');
+
+  // Same clock-skew shape, but the terminator is a genuine FAILED line - must still report failed,
+  // not be silently swallowed into "still running".
+  r = LS.parseLogTail(
+    ['2026-07-28T08:30:00 run start', '2026-07-28T08:29:30 run FAILED: boom'],
+    NOW2);
+  ok(r.lastResult === 'failed', 'a real FAILED terminator timestamped BEFORE its own start line (clock skew) must still count as failed');
+  ok(r.running === false, 'a clock-skewed FAILED terminator must not read as still running');
+})();
+
 // F3: heartbeatStale
 (() => {
   const morning = new Date('2026-07-28T08:00:00');   // before 09:00 - no expectation yet

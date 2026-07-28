@@ -43,4 +43,90 @@ Assert ($msg -match 'exceeded' -and $msg -match 'timeout') "the exception must b
 # go read the source.
 Assert ($msg -match '\dm timeout') "the exception message must state the timeout in minutes (got: $msg)"
 
+# --- pre-merge review of 6e2a148: three more gaps in this same function ---
+
+# 4) Working-directory pinning: Start-Job in PS 5.1 does NOT inherit the caller's location, so an
+# unpinned default JobScript would run 'claude' from whatever directory Start-Job happens to land in
+# (empirically: Documents), silently broadening the agent's ambient scope - the identical gotcha
+# telegram-chat.ps1 already guards against for the same Start-Job + claude pattern.
+# Invoke-ClaudeGeneration must forward -WorkingDirectory into the job (as a THIRD positional
+# argument, after $Prompt) so a JobScript that pins its own location (as the real default does)
+# actually receives a real directory to pin to.
+$testDir = Join-Path $env:TEMP ('jarvis-cwd-test-' + [guid]::NewGuid().ToString('N'))
+New-Item -ItemType Directory -Force -Path $testDir | Out-Null
+try {
+  $cwdResult = Invoke-ClaudeGeneration -Prompt 'irrelevant' -TimeoutSec 30 -WorkingDirectory $testDir -JobScript {
+    param($p, $dir, $pidFile)
+    if ($dir) { Set-Location -LiteralPath $dir -ErrorAction Stop }
+    (Get-Location).Path
+  }
+  Assert ($cwdResult.TrimEnd('\') -ieq $testDir.TrimEnd('\')) `
+    "Invoke-ClaudeGeneration must forward -WorkingDirectory into the job so a pinning JobScript actually lands in it (got: $cwdResult, want: $testDir)"
+} finally {
+  Remove-Item $testDir -Recurse -Force -ErrorAction SilentlyContinue
+}
+
+# 5) Static guard: the REAL production default JobScript (not a test override) must itself pin its
+# working directory via Set-Location BEFORE invoking claude - a regression here would silently
+# reopen the ambient-scope gap even though test 4 above stays green (a substituted JobScript always
+# supplies its own Set-Location, so it cannot catch a regression in the PRODUCTION default).
+$defaultJobScriptMatch = [regex]::Match($debriefSrc, '(?s)\[scriptblock\]\$JobScript = \{(.*?)& claude')
+Assert $defaultJobScriptMatch.Success "could not find the production default JobScript body up to its claude invocation"
+Assert ($defaultJobScriptMatch.Groups[1].Value -match 'Set-Location') `
+  "the production default JobScript in Invoke-ClaudeGeneration must pin its working directory (Set-Location) before invoking claude"
+
+# 6) Output capture + orphan child-process tree-kill on timeout: a genuine overrun used to (a)
+# discard whatever partial output the job had already produced - the exact failure category most in
+# need of diagnosis - and (b) leave any child OS process the job spawned (the real shape: claude.exe
+# as a child of the job host) running as an orphan, because Stop-Job only stops the job's OWN
+# PowerShell host, never its descendants. This reproduces both with a genuine child process standing
+# in for claude.exe (a real taskkill against a fake job host would prove nothing about tree-kill).
+$fnMatch2 = [regex]::Match($debriefSrc, '(?ms)^function Write-ClaudeLog \{.*?\n\}')
+Assert ($fnMatch2.Success) "could not extract Write-ClaudeLog from jarvis-debrief.ps1"
+. ([scriptblock]::Create($fnMatch2.Value))
+
+$logDir = Join-Path $env:TEMP ('jarvis-timeout-log-test-' + [guid]::NewGuid().ToString('N'))
+New-Item -ItemType Directory -Force -Path $logDir | Out-Null
+$logPath = Join-Path $logDir 'claude.log'
+$childPid = $null
+try {
+  $threw2 = $false
+  try {
+    Invoke-ClaudeGeneration -Prompt 'irrelevant' -TimeoutSec 3 -LogPath $logPath -RunStamp '2026-07-28T08:30:00' -JobScript {
+      param($p, $dir, $pidFile)
+      # Stand-in for claude.exe: a genuine CHILD OS PROCESS, exactly the shape Stop-Job alone cannot
+      # reach. Its PID is written into $pidFile - the SAME file the production JobScript uses for its
+      # own PID - so the timeout branch's taskkill targets it directly; it is also streamed to stdout
+      # (captured via Receive-Job, since jobs buffer output progressively even while still running)
+      # so the test can confirm the partial output survived.
+      $proc = Start-Process -FilePath 'powershell.exe' -ArgumentList '-NoProfile', '-Command', 'Start-Sleep -Seconds 120' -PassThru -WindowStyle Hidden
+      if ($pidFile) { Set-Content -LiteralPath $pidFile -Value $proc.Id -ErrorAction SilentlyContinue }
+      Write-Output "CHILD_PID=$($proc.Id)"
+      Start-Sleep -Seconds 30
+      "should never be seen"
+    }
+  } catch { $threw2 = $true }
+  Assert $threw2 "the simulated overrun must still throw (test sanity)"
+
+  Assert (Test-Path $logPath) "a genuine timeout must still produce a claude log entry (partial output must not be discarded)"
+  $logText = Get-Content -LiteralPath $logPath -Raw
+  Assert ($logText -match 'TIMED OUT') "the timeout branch must log a diagnosable marker rather than discarding the run's diagnostics entirely"
+  $childMatch = [regex]::Match($logText, 'CHILD_PID=(\d+)')
+  Assert $childMatch.Success "the partial output produced before the timeout (CHILD_PID marker) must have been captured and written to the log"
+  $childPid = [int]$childMatch.Groups[1].Value
+
+  # Give Windows a moment to actually tear the process down after taskkill /T /F.
+  $deadline = (Get-Date).AddSeconds(8)
+  $stillAlive = $true
+  while ((Get-Date) -lt $deadline) {
+    if (-not (Get-Process -Id $childPid -ErrorAction SilentlyContinue)) { $stillAlive = $false; break }
+    Start-Sleep -Milliseconds 250
+  }
+  Assert (-not $stillAlive) `
+    "a timed-out job's child process (the claude.exe stand-in) must be tree-killed via taskkill, not left orphaned holding its inherited environment/OAuth token"
+} finally {
+  if ($childPid) { try { Stop-Process -Id $childPid -Force -ErrorAction SilentlyContinue } catch { } }
+  Remove-Item $logDir -Recurse -Force -ErrorAction SilentlyContinue
+}
+
 Write-Host "claude-generation-timeout: ALL PASS"

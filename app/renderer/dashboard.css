@@ -117,5 +117,6 @@ main { flex: 1; overflow: hidden; padding: 16px 22px 20px; }
 #runningNow.live { color:#3498db; }
 #runningNow.live::after { content:''; display:inline-block; width:.5em; height:.5em; margin-left:.4em; border-radius:50%; background:#3498db; animation:pulse 1.4s ease-in-out infinite; }
 #bankFeed.warn { color:#f39c12; }
+#debriefHeartbeat.warn { color:#f39c12; }
 @keyframes pulse { 0%,100%{opacity:.35;} 50%{opacity:1;} }
 @media (prefers-reduced-motion: reduce) { #runningNow.live::after { animation:none; } }

@@ -31,4 +31,23 @@ Assert ($registerMinutes * 60000 -eq $livestateMinutes * 60000) `
 # to this test rather than a silent pass at some other number.
 Assert ($registerMinutes -eq 30) "expected register-task.ps1 ExecutionTimeLimit to be 30 minutes (got $registerMinutes) - update this test deliberately if that changes"
 
+# Pre-merge review of 6e2a148: jarvis-debrief.ps1's own single-flight lock has a THIRD independently
+# hardcoded copy of this same fact (how long a run may legitimately still be in flight) - its
+# staleness window, used to decide whether an existing debrief.lock is stale (owner dead or window
+# expired) or still guards a genuinely running process. This was found still hardcoded at the OLD
+# 15-minute figure even after this same commit raised the other two to 30 min - meaning a
+# legitimately still-running (and healthy) generation between minute 15 and 30 would have its lock
+# treated as stale and stolen by an on-demand /debrief, starting a second concurrent generation and
+# delivery. Must move together with the other two.
+$debriefPath = Join-Path $repo 'skill\bin\jarvis-debrief.ps1'
+Assert (Test-Path $debriefPath) "skill/bin/jarvis-debrief.ps1 must exist"
+$debriefText = Get-Content $debriefPath -Raw
+
+$m3 = [regex]::Match($debriefText, '\$isFresh = \(\[datetime\]\$held\.start -gt \(Get-Date\)\.AddMinutes\(-(\d+)\)\)')
+Assert $m3.Success "could not find the single-flight lock's staleness window (AddMinutes(-N)) in jarvis-debrief.ps1"
+$lockStaleMinutes = [int]$m3.Groups[1].Value
+
+Assert ($lockStaleMinutes -eq $registerMinutes) `
+  "the single-flight lock's staleness window ($lockStaleMinutes min, jarvis-debrief.ps1) must equal ExecutionTimeLimit ($registerMinutes min, register-task.ps1) - a lock that goes stale BEFORE a legitimately still-running generation would let a second run steal it out from under an in-flight, healthy process"
+
 Write-Host "scheduler-settings: ALL PASS"

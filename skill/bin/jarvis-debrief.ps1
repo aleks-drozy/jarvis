@@ -85,36 +85,102 @@ function Invoke-ClaudeGeneration {
   # Default timeout 25 min: comfortably inside the 30-min task ExecutionTimeLimit (F4), leaving
   # headroom for the freshness check, lateness stamp and delivery that still have to run afterward.
   #
+  # Pre-merge review of 6e2a148 found three real gaps in this function, all fixed together below:
+  #
+  # (a) Working directory: Start-Job in PS 5.1 has no -WorkingDirectory and does not inherit the
+  # caller's location - measured (both here and independently in telegram-chat.ps1 ~line 617) that
+  # an unpinned job lands in C:\Users\<user>\Documents regardless of where this script was actually
+  # invoked from (Task Scheduler, or a manual terminal). -WorkingDirectory/-ErrorAction Stop mirror
+  # telegram-chat.ps1's own fix for the identical gotcha.
+  #
+  # (b) Output capture on failure: the timeout and did-not-complete-cleanly branches used to
+  # throw/return without ever calling Receive-Job, discarding whatever partial output the job had
+  # already produced - meaning the exact failure category this function exists to catch (an
+  # overrun) left ZERO trace in debriefs\.jarvis-claude-<date>.log, contradicting the whole point of
+  # capturing Claude's output ("so a bad run is diagnosable, not discarded"). Both failure branches
+  # now best-effort Receive-Job and Write-ClaudeLog the partial output before throwing, when the
+  # caller supplies -LogPath/-RunStamp.
+  #
+  # (c) Orphaned child process on timeout: Stop-Job only stops the job's OWN PowerShell host.
+  # claude.exe (and its own child helper processes) is a DESCENDANT of that host, not the host
+  # itself, and survives Stop-Job as an orphan holding the OAuth token in its inherited environment -
+  # the identical gotcha telegram-chat.ps1 documents and fixes (~line 793) for the same Start-Job +
+  # claude pattern, via a PID file written from inside the job plus `taskkill /PID ... /T /F`. The
+  # comment previously here asserted the opposite ("no long-lived OAuth-bearing child process is
+  # left behind here worth hunting down by PID") with no supporting evidence; that assertion was
+  # wrong and is replaced by the same tree-kill this codebase already proved necessary next door.
+  #
   # -JobScript is overridable purely for testability (a real 25-minute wait has no place in a test
   # suite): tests substitute a fast scriptblock and a short -TimeoutSec to exercise the actual
   # timeout-detection logic without waiting for it. Production call sites never pass it and get the
-  # real Claude invocation.
+  # real Claude invocation. A substituted -JobScript that ignores the extra $dir/$pidFile arguments
+  # (as the existing fast-path tests do) is unaffected - PowerShell silently drops unbound
+  # positional arguments rather than erroring.
   param(
     [Parameter(Mandatory)][string]$Prompt,
     [int]$TimeoutSec = 1500,
+    [string]$WorkingDirectory = $skillDir,
+    [string]$LogPath,
+    [string]$RunStamp,
     [scriptblock]$JobScript = {
-      param($p)
+      param($p, $dir, $pidFile)
+      # FIRST statement: pin the working directory (see comment (a) above).
+      if ($dir) { Set-Location -LiteralPath $dir -ErrorAction Stop }
+      # Record the job host's own PID before the long-running call, so a timeout can taskkill the
+      # whole process tree (see comment (c) above). Best-effort: a failure to record it must not
+      # block the actual generation call.
+      if ($pidFile) { try { Set-Content -LiteralPath $pidFile -Value $PID -ErrorAction Stop } catch { } }
       & claude -p $p --permission-mode acceptEdits --allowedTools "Read Write Edit Bash Glob Grep" --output-format json 2>&1
     }
   )
-  $job = Start-Job -ScriptBlock $JobScript -ArgumentList $Prompt
-  $done = Wait-Job $job -Timeout $TimeoutSec
-  if (-not $done) {
-    # Stop-Job only stops the job's own host; it does not need a tree-kill like telegram-chat.ps1's
-    # (no long-lived OAuth-bearing child process is left behind here worth hunting down by PID) -
-    # the important thing is that THIS script stops waiting and throws so the caller's catch block
-    # runs. Best-effort cleanup; a failure to reap the job must not swallow the timeout exception.
-    try { Stop-Job $job -ErrorAction SilentlyContinue } catch { }
-    try { Remove-Job $job -Force -ErrorAction SilentlyContinue } catch { }
-    throw "Claude generation exceeded $([math]::Round($TimeoutSec / 60))m timeout"
+  # Sentinel is deliberately non-numeric (matches telegram-chat.ps1's own convention): it cannot
+  # satisfy the '^\s*(\d+)\s*$' match below, so a half-set-up job can never be mistaken for a real
+  # PID and fed to taskkill.
+  $pidFile = $null
+  try {
+    $pidFile = Join-Path $env:TEMP ('jarvis-debrief-pid-' + [guid]::NewGuid().ToString('N') + '.txt')
+    Set-Content -LiteralPath $pidFile -Value 'pending' -ErrorAction Stop
+  } catch { $pidFile = $null }
+  try {
+    $job = Start-Job -ScriptBlock $JobScript -ArgumentList $Prompt, $WorkingDirectory, $pidFile
+    $done = Wait-Job $job -Timeout $TimeoutSec
+    if (-not $done) {
+      # (b) capture whatever partial output exists before anything is torn down.
+      $partial = $null
+      try { $partial = Receive-Job $job -ErrorAction SilentlyContinue } catch { }
+      # (c) tree-kill the orphaned claude.exe (and its own children) by the job host's recorded PID.
+      if ($pidFile -and (Test-Path -LiteralPath $pidFile)) {
+        $hostPidText = Get-Content -LiteralPath $pidFile -Raw -ErrorAction SilentlyContinue
+        if ($hostPidText -match '^\s*(\d+)\s*$') {
+          try { & taskkill /PID $Matches[1] /T /F 2>$null | Out-Null } catch { }
+        }
+      }
+      try { Stop-Job $job -ErrorAction SilentlyContinue } catch { }
+      try { Remove-Job $job -Force -ErrorAction SilentlyContinue } catch { }
+      if ($LogPath -and $RunStamp) {
+        try {
+          Write-ClaudeLog -LogPath $LogPath -RunStamp $RunStamp `
+            -Output (@("[TIMED OUT after $([math]::Round($TimeoutSec / 60))m - partial output, if any, below]") + @($partial))
+        } catch { }
+      }
+      throw "Claude generation exceeded $([math]::Round($TimeoutSec / 60))m timeout"
+    }
+    $result = Receive-Job $job -ErrorAction SilentlyContinue
+    $jobState = $job.State
+    Remove-Job $job -Force -ErrorAction SilentlyContinue
+    if ($jobState -ne 'Completed') {
+      if ($LogPath -and $RunStamp) {
+        try {
+          Write-ClaudeLog -LogPath $LogPath -RunStamp $RunStamp `
+            -Output (@("[job did not complete cleanly: state=$jobState - partial output, if any, below]") + @($result))
+        } catch { }
+      }
+      throw "Claude generation job did not complete cleanly (state: $jobState)"
+    }
+    return $result
+  } finally {
+    if ($pidFile) { Remove-Item -LiteralPath $pidFile -Force -ErrorAction SilentlyContinue }
   }
-  $result = Receive-Job $job -ErrorAction SilentlyContinue
-  $jobState = $job.State
-  Remove-Job $job -Force -ErrorAction SilentlyContinue
-  if ($jobState -ne 'Completed') {
-    throw "Claude generation job did not complete cleanly (state: $jobState)"
-  }
-  return $result
 }
 
 function Write-ClaudeLog {
@@ -174,6 +240,51 @@ function Test-AlreadySentToday {
   } catch { return $false }
 }
 
+function Send-DebriefChannels {
+  # Pre-merge review of 6e2a148: in 'both'-channel mode, the two sends used to run back-to-back with
+  # NO per-channel try/catch, both inside the ONE outer try block. If the FIRST channel (say,
+  # Telegram) succeeded and the SECOND (email) then threw (expired Gmail app password, no network),
+  # the exception propagated straight past the run-ok log line AND the F3 heartbeat write for the
+  # ENTIRE run - so a day where Telegram genuinely delivered still logged "run FAILED" with no
+  # heartbeat at all. F8b's 09:15 catch-up trigger (whose only guard is "did ANY confirmed send
+  # happen today", via the heartbeat) would then see nothing and re-run the WHOLE pipeline -
+  # resending the identical debrief over Telegram a second time within the hour, even though
+  # Telegram was never the broken leg. That is exactly the duplicate-delivery bug class F8b's own
+  # commit message claims the heartbeat guard "can never" allow.
+  #
+  # Fix: each requested channel is attempted independently and its own failure never prevents the
+  # OTHER channel from being attempted, logged, or heartbeated. Returns which channel(s) genuinely
+  # sent and which failed; the caller (below) logs/heartbeats the successes and then re-throws a
+  # single aggregate error for any failures, so a partial failure is still loud (amber, diagnosable)
+  # without re-sending the channel that already worked.
+  #
+  # Pulled out as its own function (rather than inline in the main try block) purely so this exact
+  # interaction is directly unit-testable - see tests/debrief-partial-channel-failure.Tests.ps1 -
+  # without a real Telegram token or SMTP credential. Assumes Send-DebriefTelegram / Send-Debrief
+  # are already defined in scope (dot-sourced by the caller before this is invoked).
+  param(
+    [Parameter(Mandatory)][string]$Channel,
+    [Parameter(Mandatory)][string]$NotePath,
+    [string]$ToAddress,
+    [datetime]$RunStart = [datetime]::MinValue,
+    [datetime]$BootTime = [datetime]::MinValue,
+    [switch]$OnDemand
+  )
+  $sent = @()
+  $errors = @()
+  if ($Channel -eq 'telegram' -or $Channel -eq 'both') {
+    try { Send-DebriefTelegram -NotePath $NotePath; $sent += 'telegram' }
+    catch { $errors += "telegram: $($_.Exception.Message)" }
+  }
+  if ($Channel -eq 'email' -or $Channel -eq 'both') {
+    try {
+      Send-Debrief -NotePath $NotePath -ToAddress $ToAddress -RunStart $RunStart -BootTime $BootTime -OnDemand:$OnDemand
+      $sent += 'email'
+    } catch { $errors += "email: $($_.Exception.Message)" }
+  }
+  [pscustomobject]@{ Sent = $sent; Errors = $errors }
+}
+
 $lockFile      = Join-Path $HOME '.jarvis\debrief.lock'
 $heartbeatFile = Join-Path $HOME '.jarvis\debrief-heartbeat.json'
 $lockTaken = $false
@@ -188,14 +299,26 @@ try {
   # SINGLE-FLIGHT. A debrief takes ~3 minutes and writes one shared note. Two overlapping runs (the
   # 08:30 catch-up racing an on-demand /debrief, or a backlog of /debrief commands) each generate AND
   # each deliver, so Alex gets the same briefing two or three times minutes apart. Witnessed 2026-07-16.
-  # A lock whose owner is dead, or older than 15 min, is treated as stale and taken over.
+  # A lock whose owner is dead, or older than the staleness window below, is treated as stale and
+  # taken over.
+  #
+  # Staleness window: 30 min, matching ExecutionTimeLimit (scripts/register-task.ps1) and
+  # RUN_LIMIT_MS (app/lib/livestate.js) - see tests/scheduler-settings.Tests.ps1, which now also
+  # pins this value. Pre-merge review of 6e2a148 found this was still hardcoded at the OLD 15-min
+  # figure even though that same commit raised the other two to 30/added a 25-min internal Claude
+  # timeout specifically because generation now routinely takes longer than 15 minutes. Left at 15,
+  # a legitimately still-running (and healthy) generation between minute 15 and 30 would fail the
+  # "$alive -and $isFresh" check below on isFresh alone, letting an on-demand /debrief (which always
+  # reaches this code - Test-AlreadySentToday exempts -OnDemand runs above) steal the lock mid-run
+  # and start a second concurrent generation + delivery: the exact "five briefings" duplicate-send
+  # bug class this lock exists to prevent.
   if (Test-Path $lockFile) {
     $held = $null
     try { $held = Get-Content $lockFile -Raw | ConvertFrom-Json } catch { $held = $null }
     $alive = $false
     if ($held -and $held.pid) { $alive = [bool](Get-Process -Id ([int]$held.pid) -ErrorAction SilentlyContinue) }
     $isFresh = $false
-    if ($held -and $held.start) { try { $isFresh = ([datetime]$held.start -gt (Get-Date).AddMinutes(-15)) } catch { $isFresh = $false } }
+    if ($held -and $held.start) { try { $isFresh = ([datetime]$held.start -gt (Get-Date).AddMinutes(-30)) } catch { $isFresh = $false } }
     if ($alive -and $isFresh) {
       "$([datetime]::Now.ToString('s')) run skipped: a debrief is already running (pid $($held.pid))" | Add-Content $runLog
       exit 0
@@ -231,7 +354,10 @@ try {
 
   # capture Claude's output so a bad run is diagnosable (not discarded). F5: bounded to 25 min so an
   # overrun throws here (caught below) instead of hanging until Windows's hard 30-min task kill.
-  $out = Invoke-ClaudeGeneration -Prompt $prompt -TimeoutSec 1500
+  # -LogPath/-RunStamp let Invoke-ClaudeGeneration itself best-effort log whatever PARTIAL output
+  # exists if it has to throw (timeout / did-not-complete-cleanly) - see the fix comment on that
+  # function: this used to be discarded entirely for exactly the failure category most in need of it.
+  $out = Invoke-ClaudeGeneration -Prompt $prompt -TimeoutSec 1500 -LogPath $claudeLog -RunStamp $runStart.ToString('s')
   Write-ClaudeLog -LogPath $claudeLog -RunStamp $runStart.ToString('s') -Output $out
   Clear-OldClaudeLogs -VaultPath $vault
 
@@ -256,28 +382,37 @@ try {
   $lateNote = Get-LatenessNote -RunStart $runStart -BootTime $boot -OnDemand:$OnDemand
   if ($lateNote) { Add-Content -Encoding UTF8 -Path $note -Value "`n> $lateNote" }
 
-  # Deliver per channel. Each delivery throws on failure so it is caught below (loud FAILED, never a
-  # silent miss). Self-only is enforced inside both senders (email recipient lock; Telegram chat-id lock).
+  # Deliver per channel via Send-DebriefChannels (pre-merge review of 6e2a148 - see its own comment
+  # for the exact duplicate-delivery bug this replaced). Self-only is enforced inside both senders
+  # (email recipient lock; Telegram chat-id lock).
   $channel = if ($Channel) { $Channel } else { Get-DebriefChannel }
   if ($channel -eq 'telegram' -or $channel -eq 'both') {
     . (Join-Path $PSScriptRoot 'telegram-bot.ps1') -DotSourceOnly
-    Send-DebriefTelegram -NotePath $note
   }
-  if ($channel -eq 'email' -or $channel -eq 'both') {
-    Send-Debrief -NotePath $note -ToAddress $OwnerEmail -RunStart $runStart -BootTime $boot -OnDemand:$OnDemand
+  $delivery = Send-DebriefChannels -Channel $channel -NotePath $note -ToAddress $OwnerEmail `
+    -RunStart $runStart -BootTime $boot -OnDemand:$OnDemand
+
+  $lateTag = ''; if ($lateNote) { $lateTag = ' [late catch-up]' }
+  if ($delivery.Sent.Count -gt 0) {
+    # Logged (and heartbeated) for whichever channel(s) genuinely succeeded, regardless of whether
+    # another requested channel is about to be reported as failed below - see Send-DebriefChannels.
+    "$([datetime]::Now.ToString('s')) run ok (note written $((Get-Item $note).LastWriteTime.ToString('t')), via $($delivery.Sent -join '+'))$lateTag" | Add-Content $runLog
+    # F3: positive delivery heartbeat, written ONLY after at least one channel send has returned
+    # successfully (never speculatively). Distinct from the run-status log: this is a single small
+    # JSON file the health surface (and F8b's 09:15 catch-up guard) can check for "did today's send
+    # actually happen", independent of log-tail parsing. Best-effort: a failure here must never turn
+    # a real success into a false "run FAILED".
+    try {
+      Set-DebriefHeartbeat -Date $today -Channel ($delivery.Sent -join '+') -HeartbeatFile $heartbeatFile
+    } catch { }
+  }
+  if ($delivery.Errors.Count -gt 0) {
+    # At least one requested channel failed. Throw so the outer catch below logs a loud FAILED
+    # (never a silent miss) - any channel(s) that DID succeed are already logged/heartbeated above
+    # and will therefore be treated as already-sent by F8b's 09:15 catch-up, not resent.
+    throw "delivery failed on: $($delivery.Errors -join '; ')"
   }
   if ($lateNote) { Toast "Debrief ready (late catch-up), Sir." } else { Toast "Debrief ready, Sir." }
-  $lateTag = ''; if ($lateNote) { $lateTag = ' [late catch-up]' }
-  "$([datetime]::Now.ToString('s')) run ok (note written $((Get-Item $note).LastWriteTime.ToString('t')), via $channel)$lateTag" | Add-Content $runLog
-
-  # F3: positive delivery heartbeat, written ONLY after a channel send has returned successfully
-  # (never speculatively, never on a path where the send threw). Distinct from the run-status log:
-  # this is a single small JSON file the health surface can check for "did today's send actually
-  # happen", independent of log-tail parsing. Best-effort: a failure here must never turn a real
-  # success into a false "run FAILED".
-  try {
-    Set-DebriefHeartbeat -Date $today -Channel $channel -HeartbeatFile $heartbeatFile
-  } catch { }
 } catch {
   $err = $_.Exception.Message
   "$([datetime]::Now.ToString('s')) run FAILED: $err" | Add-Content $runLog
