@@ -46,7 +46,7 @@ function Read-OpportunityStore {
   # CRITICAL-2 FIX (review): CORRUPT used to also read as a silent empty set, and the caller then
   # unconditionally wrote that empty set back over the file - one interrupted write destroyed every
   # record, and the only signal was a Write-Warning the hidden wscript launcher discards. The spec
-  # (DESIGN-OPPORTUNITY-ALARM.md, vault 12-jarvis, S4) requires "fail loud in the log... a lost record must not become a lost
+  # (the opportunity-alarm design note, S4) requires "fail loud in the log... a lost record must not become a lost
   # opportunity." Now a parse failure QUARANTINES the bad file (renamed to <path>.corrupt-<timestamp>,
   # never deleted) before returning empty, and sets -WasCorrupt so the caller can skip persisting this
   # run entirely rather than clobbering the quarantined evidence with a reconstructed-from-nothing

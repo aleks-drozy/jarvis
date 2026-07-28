@@ -235,7 +235,7 @@ function Send-DebriefTelegram {
 }
 
 function Save-Capture {
-  # Append a texted note to the vault capture file (12-jarvis - an allowed write target, Safety 7). The
+  # Append a texted note to the vault capture file (an allowed write target, Safety 7). The
   # note is DATA: written literally via Add-Content, NEVER executed. Newlines are flattened to keep one
   # note per line. Returns the note text.
   param([string]$Text)

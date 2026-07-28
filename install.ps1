@@ -20,7 +20,8 @@ param(
   [switch]$InitVault
 )
 $ErrorActionPreference = 'Stop'
-$repoSkill = Join-Path $PSScriptRoot 'skill'
+$repoRoot = $PSScriptRoot
+$repoSkill = Join-Path $repoRoot 'skill'
 . (Join-Path $repoSkill 'bin\get-jarvis-config.ps1')
 
 # ---------- 1. ensure config ----------
@@ -46,6 +47,7 @@ if (-not (Test-Path $ConfigPath)) {
   [ordered]@{
     vault_path = $VaultPath; projects_root = $ProjectsRoot; job_search_dir = $JobSearchDir
     skill_dir = $skillDir; owner_email = $OwnerEmail; app_id = $d.app_id; roadmap_index = ''
+    app_dir = (Join-Path $repoRoot 'app')
   } | ConvertTo-Json | Set-Content -Encoding UTF8 $ConfigPath
   Write-Host "Wrote $ConfigPath"
 }

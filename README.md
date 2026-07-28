@@ -1,6 +1,8 @@
 # Jarvis
 
-**A personal automation system that runs unattended on Windows.** Three scheduled tasks, a
+[![tests](https://github.com/aleks-drozy/jarvis/actions/workflows/tests.yml/badge.svg)](https://github.com/aleks-drozy/jarvis/actions/workflows/tests.yml)
+
+**A personal automation system that runs unattended on Windows.** Four scheduled tasks, a
 read-only PSD2 open-banking feed, local speech-to-text, and a self-only Telegram bridge, wired
 to a Claude Code agent skill. At 08:30 every morning it assembles a briefing from my repos, my
 inbox, my calendar and my bank, writes it to a Markdown vault, and pushes it to my phone. Nobody
@@ -8,8 +10,8 @@ is watching when it runs, so most of the code is about what happens when somethi
 
 <p align="center"><img src="docs/media/hero.gif" width="820" alt="Asking Jarvis about job applications, by voice"></p>
 <p align="center"><i>"How are my job applications looking?" spoken aloud, transcribed locally by whisper.cpp,
-answered from the real tracker. Full trailer, sound on: <a href="docs/media/trailer.mp4">docs/media/trailer.mp4</a>
-(cold open rendered frame-by-frame from the app's own UI). Raw demo: <a href="docs/media/voice.mp4">voice.mp4</a></i></p>
+answered from the real tracker. Full trailer, sound on: <a href="https://github.com/aleks-drozy/jarvis/releases/download/v3.0.0/trailer.mp4">trailer.mp4</a>
+(cold open rendered frame-by-frame from the app's own UI). Raw demo: <a href="https://github.com/aleks-drozy/jarvis/releases/download/v3.0.0/voice.mp4">voice.mp4</a></i></p>
 
 Built solo by [Aleksandrs Drozdovs](https://www.linkedin.com/in/aleksandrsdrozdovs/),
 CS and Software Engineering graduate (Maynooth University, 2026), Dublin. MIT licensed.
@@ -36,9 +38,9 @@ If you are skimming, these are the parts that are not a weekend of prompting.
    suites have shipped since; 21 today), because a comment quoting that line satisfied the assertion.
    The repair strips comments with PowerShell's own tokenizer and ships eleven positive controls
    proving the stripper actually runs.
-5. **[It has run every day since the first commit](#does-it-actually-run).** 126 commits in the 15
-   days to `v3.0.0` (2026-07-08 to 2026-07-22), three registered Windows scheduled tasks, 21 test
-   suites, every CI run green so far (11 of 11), gitleaks over the full history.
+5. **[It has run every day since the first commit](#does-it-actually-run).** 126 commits to `v3.0.0`
+   in 15 days (2026-07-08 to 2026-07-22), four registered Windows scheduled tasks, 25 test suites,
+   every CI run to `v3.0.0` green (11 of 11), gitleaks over the full history.
 
 ## Architecture
 
@@ -73,7 +75,7 @@ check-opportunities.ps1 --> sweeps job mail for OPEN DOORS only (assessment, int
         |                   pushes an alarm, re-reminds daily until cleared from the phone
         +-- opportunity-store.ps1      persistence, id-seed hashing, corrupt-store recovery
 
-Electron companion (app/, launched by hand, not scheduled)
+Electron companion (app/, optional logon-scheduled autostart, or launched by hand)
         tray + always-resident orb + Summon HUD + dashboard
         Ctrl+Shift+Space -> local whisper.cpp STT -> same chat pipeline -> edge-tts voice out
 ```
@@ -136,9 +138,8 @@ briefing now stamps itself with the cause, derived from `Win32_OperatingSystem.L
 ### The rest of the scar tissue
 
 - **PowerShell 5.1 reads `.ps1` as ANSI.** One em dash in a string broke the whole parser. Every
-  tracked `.ps1` and `.vbs` is pure ASCII. Honest scope note: the byte scan that enforces this
-  currently covers `get-bank-data.ps1` and `setup-bank.ps1` only, so it is a spot check rather than
-  a repo-wide gate.
+  tracked `.ps1` and `.vbs` is pure ASCII, enforced repo-wide by
+  [`tests/ascii-purity.Tests.ps1`](tests/ascii-purity.Tests.ps1).
 - **`ConvertTo-Json` unwraps single-element arrays.** `Commits` serialized as three different shapes
   depending on how many there were. Wrapped with `@()` and locked with a test.
 - **The 08:30 briefing silently skipped a morning.** The laptop was asleep, and Task Scheduler's
@@ -305,21 +306,24 @@ Electron hardening: `contextIsolation: true` on all four windows, `nodeIntegrati
 dashboard, a hand-listed `contextBridge` invoke surface with no raw node, and a permission handler
 that grants `media` and nothing else.
 
-The app is launched by hand (`npm start`), not by a scheduled task. That is the one part of this
-system that is on demand rather than automated, and it should not be described otherwise.
+The app can be registered as a fourth, logon-triggered scheduled task via
+`scripts/register-app-autostart.ps1`, exactly like the other three (opt-in, nothing on by
+default). Launching it by hand (`npm start`) remains fully supported — the app's own
+single-instance lock makes running it either way safe.
 
 ---
 
 ## Tests, and what they actually guarantee
 
-21 suites: 20 native PowerShell suites (`tests/*.Tests.ps1` excluding the shim below, 3,615 lines) and
+25 suites: 24 native PowerShell suites (`tests/*.Tests.ps1`, including the shim below, 3,762 lines) and
 one Node suite ([`tests/livestate.node.js`](https://github.com/aleks-drozy/jarvis/blob/master/tests/livestate.node.js), 92 lines).
 `tests/livestate.Tests.ps1` is a 6-line shim that only shells out to the Node suite so the
-PowerShell-child CI harness below can invoke it too - it is not a distinct suite, and counting it
-separately would double-count livestate. (3,713 is the combined PowerShell-plus-Node line count, not
-the PowerShell-only figure it looked like.) No framework, no Pester. Each real suite defines its own
-`Assert` and prints `<name>: ALL PASS`. 722 assertions at statement level, and more at runtime because
-40 `foreach` loops re-run assertions over parameter tables.
+PowerShell-child CI harness below can invoke it too - it is still counted among the 24, because it is
+its own `tests/*.Tests.ps1` file with its own `ALL PASS` line, even though the assertions it triggers
+live in the Node file. (3,854 is the combined PowerShell-plus-Node line count.) No framework, no
+Pester. Each real suite defines its own `Assert` and prints `<name>: ALL PASS`. 787 `Assert` call sites
+across the suites, and more at runtime because 40 `foreach` loops re-run assertions over parameter
+tables.
 
 **CI** (`.github/workflows/tests.yml`) runs on every push to `master` and on every pull request. Two
 jobs:
@@ -395,18 +399,21 @@ machine path, my email or my app id lands in tracked source. It also asserts the
 **What it does not cover, stated plainly:** it exempts `docs/`, `PRIVACY.md`, `TERMS.md` and itself.
 My name appears in `LICENSE`, `PRIVACY.md` and `TERMS.md` by design (copyright and legal notices), and
 my contact email appears in `PRIVACY.md` and `TERMS.md` by design; `LICENSE` carries the name only, no
-email. The guard hunts four literal patterns, so it does not currently catch my vault's folder naming,
-which is still hardcoded in a few places in `skill/`. The honest claim is: **no executable source
-hardcodes my machine paths**, the installer renders `{{VAULT}}`-style placeholders, and the guard fails
-the build if that changes.
+email. The guard hunts seven literal patterns, including my vault's folder naming and the name of my
+personal planning doc, and a positive control plants a personal value in a scratch file first so a
+zero-hit run is proven to mean "found nothing," not "found nothing because the scan is broken."
+The honest claim is: **no executable source hardcodes my machine paths**, the installer renders
+`{{VAULT}}`-style placeholders, and the guard fails the build if that changes.
 
 ---
 
 ## Does it actually run
 
-- **Three registered Windows scheduled tasks**: the 08:30 debrief, a 3-minute Telegram poller, and an
-  hourly opportunity sweep. Each leaves a dated, checkable trace on every run rather than a
-  point-in-time scheduler status that flips between one query and the next.
+- **Four registered Windows scheduled tasks**: the 08:30 debrief, a 3-minute Telegram poller, an
+  hourly opportunity sweep, and the desktop app at logon. The first three each leave a dated,
+  checkable trace file on every run rather than a point-in-time scheduler status that flips
+  between one query and the next; the fourth is checkable the same way any registered task is,
+  through Windows' own scheduled-task run history (`Get-ScheduledTaskInfo`).
 - **A dated briefing note for every day since the first commit**, with no gaps. Fair warning: those
   notes live in a private vault outside this repo, so you cannot verify that from here. The
   scheduled-task definitions and the heartbeat-writing code are in the repo and you can read those.
