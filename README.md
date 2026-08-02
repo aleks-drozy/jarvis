@@ -309,7 +309,7 @@ that grants `media` and nothing else.
 
 The app can be registered as a fourth, logon-triggered scheduled task via
 `scripts/register-app-autostart.ps1`, exactly like the other three (opt-in, nothing on by
-default). Launching it by hand (`npm start`) remains fully supported — the app's own
+default). Launching it by hand (`npm start`) remains fully supported - the app's own
 single-instance lock makes running it either way safe.
 
 ---
@@ -350,7 +350,7 @@ STT, VAD calibration, audio downsampling, tray icon compositing, and a repo-wide
 
 **Note on frequency:** 11 CI runs against 126 commits at the `v3.0.0` tag. The workflow triggers on
 pushes to `master` and on PRs, and some work landed on `master` in batches. CI is real and every run
-so far has passed; it has not run once per commit.
+through the `v3.0.0` tag passed; it has not run once per commit.
 
 ### Tests that test their own instrumentation
 
@@ -415,13 +415,18 @@ The honest claim is: **no executable source hardcodes my machine paths**, the in
   checkable trace file on every run rather than a point-in-time scheduler status that flips
   between one query and the next; the fourth is checkable the same way any registered task is,
   through Windows' own scheduled-task run history (`Get-ScheduledTaskInfo`).
-- **A dated briefing note for every day since the first commit**, with no gaps. Fair warning: those
-  notes live in a private vault outside this repo, so you cannot verify that from here. The
-  scheduled-task definitions and the heartbeat-writing code are in the repo and you can read those.
+- **A dated briefing note for every day since the first commit, except two.** 2026-07-25 and
+  2026-07-27 are silent gaps: three compounding bugs (a forged health-check log that read green on
+  exactly the days delivery failed, an execution time limit that had grown shorter than generation
+  time as the vault grew, and hibernation destroying the 08:30 wake timer) meant the debrief just
+  didn't go out, with nothing failing loudly. Root-caused and fixed 2026-07-28 with a
+  delivery-heartbeat-gated catch-up trigger that cannot re-send a debrief that already went out. Fair
+  warning: the notes themselves live in a private vault outside this repo, so you cannot verify the
+  count from here. The scheduled-task definitions and the heartbeat-writing code that closes the gap
+  are in the repo and you can read those.
 - **126 commits in 15 calendar days** (first commit 2026-07-08, `v3.0.0` on 2026-07-22), 8 merged
   pull requests, `master` level with `origin/master`.
-- **Every CI run so far has passed**, 11 of 11 at `v3.0.0`, gitleaks over the full history on every
-  one.
+- **Every CI run through `v3.0.0` passed**, 11 of 11, gitleaks over the full history on every one.
 
 The opportunity sweep is the newest piece: hourly, it looks for **open doors only** (assessment
 invites, interviews, offers) and pushes an alarm that re-reminds daily until I clear it with
