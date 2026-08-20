@@ -30,6 +30,11 @@ Produce a debrief that opens with the answer to "what should I do today", then c
 6. Write to `{{VAULT}}\debriefs\YYYY-MM-DD.md`. If it already
    exists, update in place and append "(re-run HH:MM)" — do not duplicate SUGGESTIONS entries (key by date).
 7. Append ≤1 fresh suggestion to `{{VAULT}}\SUGGESTIONS.md` as `### YYYY-MM-DD — <idea>` (skip if today's exists).
+   **If `PATTERNS.md` is present, check its `suggestion_weights` section first**: a category with a
+   persistently low act-rate and a high times_raised should be ranked lower or actively skipped this
+   run rather than re-raised on repetition alone — that's the whole point of consolidation (Jarvis
+   learning which of its own advice lands). A genuinely new idea in that category, or new information
+   attached to an old one, still gets raised; a bare repeat of the same unacted idea does not.
 8. Update `LEDGER.md`: increment times_raised for each open topic raised today (max once per day);
    add rows for new nudges; set status done/snoozed when Alex resolves or dismisses one. Never
    un-snooze without Alex asking.
@@ -56,6 +61,10 @@ allowance (FINANCE.md), commits shipped (collector). Two sentences of honest tre
 Then scan the week's notes for **contradictions or drift** (a tracker row that contradicts a newer
 note, a goal that quietly changed) and surface at most ONE for him to resolve — "Your charter still
 says X but this week you did Y — which is true now, Sir?" Never silently rewrite the older note.
+**If `PATTERNS.md` exists and carries this week's date range in its Weekly learning report** (written
+by `skill/bin/consolidate-memory.ps1`, which runs just before the Sunday debrief), quote that report
+verbatim, unedited, as the closing lines of the 📈 Week section — it is Jarvis's own honest account of
+what memory consolidation found this week, not something to rephrase or soften.
 
 ## Module playbooks
 - **🩺 Health (self-check, runs FIRST):** Jarvis reports on himself before reporting on Alex — a butler

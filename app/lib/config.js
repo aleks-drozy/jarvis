@@ -19,6 +19,7 @@ const DEFAULTS = {
   app_dir:        '',
   staging_enabled: false, // Night Shift: opt-in overnight reversible-step prep staging (career triggers only)
   staging_hour:    3,     // local hour (0-23) the Night Shift task runs at :30, e.g. 3 = 03:30
+  consolidation_enabled: false, // weekly semantic-memory consolidation (PATTERNS.md rewrite): opt-in, off by default
 };
 
 function loadConfig(configPath) {
