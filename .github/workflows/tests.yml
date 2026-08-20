@@ -46,6 +46,11 @@ jobs:
           Write-Host "all PowerShell suites green"
       - name: Node test suite
         run: node tests/livestate.node.js
+      - name: Behavioral evals (CI tier - no network, never invokes claude)
+        shell: powershell
+        run: |
+          & powershell -NoProfile -ExecutionPolicy Bypass -File evals\run-evals.ps1 -Mode ci
+          if ($LASTEXITCODE -ne 0) { Write-Error "evals -Mode ci failed"; exit 1 }
 
   secret-scan:
     runs-on: ubuntu-latest

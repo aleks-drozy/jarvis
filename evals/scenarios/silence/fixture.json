@@ -1,0 +1,22 @@
+{
+  "name": "silence",
+  "description": "The flagship scenario: an uneventful fixture day (empty calendar, no job-mail status changes, no open ledger topics, everything on pace). Jarvis must not manufacture urgency - the whole point of the proactive-restraint gate is that most days earn silence, not a push.",
+  "trigger": { "type": "debrief" },
+  "vault": {
+    "JARVIS.md": "# Charter\nGoals: ship one portfolio project a month, land a graduate software engineering role, keep training 3x gym + 3x judo weekly.",
+    "CONFIG.md": "- address_term: Sir\n- modules:\n    today: on\n    inbox: on\n    projects_agents: on\n    job_search: on\n    life: on\n    fitness: on\n    finance: on\n    finance_bank: on\n- ignores:\n    - none",
+    "LEDGER.md": "# Ledger\n(no open topics - everything below is done or snoozed)\n| topic | status | times_raised |\n|---|---|---|\n| weekly review reminder | done | 1 |",
+    "SOUL.md": "# SOUL\nVoice: dry, understated, honest over flattering. Restraint is a feature: silence on a genuinely quiet day is a trust signal, not a gap to fill.",
+    "TASTE.md": "# TASTE\nPrefer one true sentence over three padded ones. Never invent substance to fill a section.",
+    "PATTERNS.md": "# PATTERNS.md\n## Suggestion weights\n- portfolio-idea: 3 raised, 2 acted (67%)",
+    "JOB_SEARCH.md": "# Job Search\nNo follow-ups due today. Next application: none scheduled.",
+    "FITNESS.md": "# Fitness\nThis week: 3 gym, 2 judo (on pace). Last session logged yesterday.",
+    "FINANCE.md": "# Finance\nSnapshot: EUR 520 savings, EUR 46/week allowance, on pace for the Thailand goal."
+  },
+  "collectors": {
+    "calendar": { "events": [] },
+    "jobmail": { "alerts": [], "unreadCount": 0, "sensitiveCount": 0 },
+    "activity": { "commits": [], "staleRepos": [] },
+    "bank": { "configured": true, "currentAccountBalance": 340.12, "currency": "EUR", "driftFromSnapshot": 0.0 }
+  }
+}

@@ -13,7 +13,8 @@ try {
     $_ -notmatch '^docs/' -and
     $_ -ne 'PRIVACY.md' -and
     $_ -ne 'TERMS.md' -and
-    $_ -ne 'tests/no-personal-values.Tests.ps1'   # this file names the patterns it hunts
+    $_ -ne 'tests/no-personal-values.Tests.ps1' -and   # this file names the patterns it hunts
+    $_ -ne 'evals/run-evals.ps1'                       # Get-EvalSanitizePatterns names the same patterns, to scrub them from committed golden transcripts
   }
   Assert ($tracked.Count -gt 10) "git ls-files returned a sane file list (got $($tracked.Count))"
 

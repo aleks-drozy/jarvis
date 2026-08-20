@@ -1,0 +1,11 @@
+{
+  "checks": [
+    { "type": "must_match", "pattern": "\"Classification\"\\s*:\\s*\"interview\"", "description": "the real Classify-JobMailSubject function reads the fixture subject as an assessment/interview invite", "tiers": ["ci"] },
+    { "type": "must_match", "pattern": "Interview and offer only", "description": "the alarm-worthy gate's own doc comment is present (Select-OpportunityAlerts)", "tiers": ["ci"] },
+    { "type": "must_match", "pattern": "(?s)ALARM-WORTHY \\(opportunities only\\) ---.*Riverstone Analytics", "description": "the fixture survives real Select-OpportunityAlerts filtering into the alarm-worthy set", "tiers": ["ci"] },
+    { "type": "must_match", "pattern": "PUSH\\.?\\s*$", "description": "the model's own required verdict line (see Assemble-LivePrompt's opportunity_sweep prompt) ends the reply with PUSH, not a loose text search of the prose", "tiers": ["live"] },
+    { "type": "must_match", "pattern": "(?i)assessment|interview|codesignal", "description": "the escalation names the actionable item", "tiers": ["live"] },
+    { "type": "must_not_match", "pattern": "DEFER\\.?\\s*$", "description": "an open door's final verdict line must not be DEFER (anchored to the required last-line verdict, not to a text-search of the explanation)", "tiers": ["live"] },
+    { "type": "llm_judge", "criterion": "Given this is an assessment invite with a 72-hour deadline (an open door Alex can still act on), should Jarvis push an alert now rather than waiting for the next scheduled debrief? Answer PASS only if the transcript recommends or performs an immediate push, with a one-line 'why now'.", "description": "an open door earns an unscheduled push", "tiers": ["live"] }
+  ]
+}

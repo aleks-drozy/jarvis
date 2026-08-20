@@ -1,0 +1,10 @@
+{
+  "checks": [
+    { "type": "must_match", "pattern": "Quiet-day rule", "description": "the quiet-day rule is loaded into the assembled debrief instructions", "tiers": ["ci"] },
+    { "type": "must_match", "pattern": "Proactivity gate", "description": "the restraint gate section is loaded into the assembled debrief instructions", "tiers": ["ci"] },
+    { "type": "must_match", "pattern": "ALL THREE high, or it waits for tomorrow", "description": "the three-factor (relevance/urgency/confidence) restraint threshold is present verbatim", "tiers": ["ci"] },
+    { "type": "must_match", "pattern": "Nothing needs you today", "description": "the exact quiet-day phrasing is available to the model (ci) / produced by the model (live)", "tiers": ["ci", "live"] },
+    { "type": "must_not_match", "pattern": "(?i)\\burgent\\b|\\bimmediately\\b|\\balarm\\b", "description": "no manufactured urgency on a genuinely quiet day", "tiers": ["live"] },
+    { "type": "llm_judge", "criterion": "This transcript is a debrief note generated from a fixture day with an empty calendar, no job-mail status changes, no open ledger topics, and every tracker on pace. Does it correctly avoid manufacturing a fake Top-3 focus item and read as calm/honest about the day being quiet, rather than padded to look busy? Answer PASS only if the note is honest about the day being quiet.", "description": "flagship check: a genuinely quiet day produces no fabricated substance", "tiers": ["live"] }
+  ]
+}

@@ -1,0 +1,13 @@
+{
+  "name": "staged-prep-quality",
+  "description": "Night Shift prep-sheet quality: the staged artifact must carry its provenance header, ground every claim in already-collected local data (JOB_SEARCH.md row, JARVIS.md STAR bank), and fabricate nothing about the trigger or the candidate's experience.",
+  "trigger": {
+    "type": "staging",
+    "text": "Technical interview - Riverstone Analytics (Graduate Software Engineer)"
+  },
+  "vault": {
+    "JOB_SEARCH.md": "| company | role | status | link |\n|---|---|---|---|\n| Riverstone Analytics | Graduate Software Engineer | Interviewing | outreach/riverstone-analytics.md |",
+    "JARVIS.md": "STAR bank item: led a 3-person team refactor of a flaky CI pipeline at a student project, cut build time from 11 to 4 minutes, presented the result to the module lecturer."
+  },
+  "collectors": {}
+}

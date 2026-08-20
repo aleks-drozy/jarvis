@@ -155,6 +155,19 @@ function Invoke-ChatCollectorProcess {
   return @{ Output = $out; ExitCode = $code; TimedOut = $false }
 }
 
+function Get-ChatBankScopeNote {
+  # Pure text, no I/O: the FINANCE.md vault-exclusion pointer described where Invoke-ChatPrefetch
+  # appends it (see the comment there for WHY it exists - the 2026-07-21 "how much can I spend"
+  # miss). Extracted into its own function so evals/run-evals.ps1 -Mode ci can assert this pointer is
+  # actually wired into the bank prefetch WITHOUT invoking a real, networked collector - CI mode never
+  # touches the network (see evals/scenarios/money-with-vault-context/). Returns an array of lines;
+  # callers own how they're joined.
+  return @(
+    'The figures above are the LINKED CURRENT ACCOUNT ONLY. This feed cannot see Revolut vaults, pots or savings sub-accounts, so a low or zero balance here does NOT mean Alex has no money.',
+    'Before answering any question about what he can spend, save or afford, READ FINANCE.md in your notes directory: it holds the recorded savings, the monthly budget and the weekly allowance, and those are the figures that answer the question. Cite both, and say which came from the live feed and which from FINANCE.md.'
+  )
+}
+
 function Invoke-ChatPrefetch {
   # Run the named collectors and return their output as a labelled text block for the prompt fence.
   # Each is invoked with NO arguments - nothing from the message is passed through. A collector that
@@ -231,9 +244,11 @@ function Invoke-ChatPrefetch {
     # structurally invisible to it (a known limit of the AIS feed, and the same trap caught a human
     # reconciliation on 2026-07-19). The recorded figures live in FINANCE.md, which is inside
     # the read scope - so say so here rather than hoping the model infers it.
+    # Pulled into its own function (2026-08-20, evals/) so the eval harness's CI tier can assert this
+    # exact pointer exists WITHOUT invoking a real (networked) collector - Get-ChatBankScopeNote is
+    # pure text, callable in isolation.
     [void]$sb.AppendLine('## collector: bank-scope-note')
-    [void]$sb.AppendLine('The figures above are the LINKED CURRENT ACCOUNT ONLY. This feed cannot see Revolut vaults, pots or savings sub-accounts, so a low or zero balance here does NOT mean Alex has no money.')
-    [void]$sb.AppendLine('Before answering any question about what he can spend, save or afford, READ FINANCE.md in your notes directory: it holds the recorded savings, the monthly budget and the weekly allowance, and those are the figures that answer the question. Cite both, and say which came from the live feed and which from FINANCE.md.')
+    foreach ($line in (Get-ChatBankScopeNote)) { [void]$sb.AppendLine($line) }
   }
   return $sb.ToString()
 }

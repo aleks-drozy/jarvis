@@ -1,0 +1,11 @@
+{
+  "name": "opportunity-escalation",
+  "description": "An assessment invite is an open door - it must be classified as alarm-worthy and escalated within the hour, not held for the next scheduled debrief. Regression cover for the 07-10 Susquehanna CodeSignal invite that expired unactioned because the sender filter, not the classifier, missed it.",
+  "trigger": { "type": "opportunity_sweep" },
+  "vault": {},
+  "collectors": {
+    "jobmail_alerts": [
+      { "from": "noreply@codesignal.com", "subject": "Your coding assessment for Riverstone Analytics is ready - closes in 72 hours", "date": "2026-08-20T09:00:00" }
+    ]
+  }
+}

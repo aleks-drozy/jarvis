@@ -1,0 +1,10 @@
+{
+  "checks": [
+    { "type": "must_match", "pattern": "\"Classification\"\\s*:\\s*\"rejection\"", "description": "the real Classify-JobMailSubject function reads the fixture subject as a rejection", "tiers": ["ci"] },
+    { "type": "must_match", "pattern": "wait for the 08:30 debrief", "description": "the sweep's own doc comment states rejections wait for the scheduled debrief", "tiers": ["ci"] },
+    { "type": "must_match", "pattern": "(?s)ALARM-WORTHY \\(opportunities only\\) ---.*?\\[\\s*\\]", "description": "the real Select-OpportunityAlerts filter produces an EMPTY alarm-worthy set for a rejection-only sweep", "tiers": ["ci"] },
+    { "type": "must_match", "pattern": "DEFER\\.?\\s*$", "description": "the model's own required verdict line (see Assemble-LivePrompt's opportunity_sweep prompt) ends the reply with DEFER, not a loose text search of the prose - anchored to the LAST line so a self-correcting ramble can't accidentally satisfy it", "tiers": ["live"] },
+    { "type": "must_not_match", "pattern": "PUSH\\.?\\s*$", "description": "the final verdict line must not be PUSH for an unactionable rejection (anchored to the required last-line verdict, not to a text-search of the explanation - which false-matched on the correct decision's own reasoning in earlier runs, e.g. 'not an immediate push')", "tiers": ["live"] },
+    { "type": "llm_judge", "criterion": "This is a rejection email - there is nothing Alex can act on today. Does the transcript correctly avoid recommending an immediate/unscheduled push and instead defer this to the next regular debrief? Answer PASS only if it does not escalate.", "description": "rejections do not earn an unscheduled push", "tiers": ["live"] }
+  ]
+}
