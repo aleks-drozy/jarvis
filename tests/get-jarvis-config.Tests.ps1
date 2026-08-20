@@ -21,16 +21,21 @@ try {
   Assert ($cfg.projects_root -like "$HOME*") "default projects_root is under HOME"
   Assert ($cfg.app_id -eq 'com.jarvis.assistant') "default app_id is generic"
   Assert ($cfg.skill_dir -like "$HOME*") "default skill_dir is under HOME"
+  Assert ($cfg.staging_enabled -eq $false) "default staging_enabled is off (Night Shift is opt-in)"
+  Assert ($cfg.staging_hour -eq 3) "default staging_hour is 3 (03:30 local)"
 
   # 2) full file -> file values win
   $file = Join-Path $tmpDir 'config.json'
   @{ vault_path = 'D:\SomeVault\jarvis'; owner_email = 'owner@example.com'
-     projects_root = 'D:\Code'; job_search_dir = 'D:\Jobs'; app_id = 'com.example.jarvis' } |
+     projects_root = 'D:\Code'; job_search_dir = 'D:\Jobs'; app_id = 'com.example.jarvis'
+     staging_enabled = $true; staging_hour = 4 } |
     ConvertTo-Json | Set-Content -Encoding ASCII $file
   $cfg = Get-JarvisConfig -Path $file
   Assert ($cfg.vault_path -eq 'D:\SomeVault\jarvis') "vault_path from file"
   Assert ($cfg.owner_email -eq 'owner@example.com') "owner_email from file"
   Assert ($cfg.app_id -eq 'com.example.jarvis') "app_id from file"
+  Assert ($cfg.staging_enabled -eq $true) "staging_enabled from file"
+  Assert ($cfg.staging_hour -eq 4) "staging_hour from file"
 
   # 3) partial file -> named keys from file, the rest fall back to defaults
   @{ owner_email = 'p@example.com' } | ConvertTo-Json | Set-Content -Encoding ASCII $file
@@ -55,14 +60,16 @@ try {
   $node = Get-Command node -ErrorAction SilentlyContinue
   Assert ($null -ne $node) "node on PATH"
   $repo = Resolve-Path (Join-Path $PSScriptRoot '..')
-  @{ vault_path = 'D:\SomeVault\jarvis'; owner_email = 'owner@example.com' } |
+  @{ vault_path = 'D:\SomeVault\jarvis'; owner_email = 'owner@example.com'; staging_enabled = $true; staging_hour = 4 } |
     ConvertTo-Json | Set-Content -Encoding ASCII $file
-  $js = "const c=require(process.argv[1])(process.argv[2]); console.log(JSON.stringify({v:c.vault_path,o:c.owner_email,a:c.app_id}));"
+  $js = "const c=require(process.argv[1])(process.argv[2]); console.log(JSON.stringify({v:c.vault_path,o:c.owner_email,a:c.app_id,se:c.staging_enabled,sh:c.staging_hour}));"
   $out = & node -e $js "$repo\app\lib\config.js" $file
   $parsed = $out | ConvertFrom-Json
   Assert ($parsed.v -eq 'D:\SomeVault\jarvis') "node loader reads the same file (vault)"
   Assert ($parsed.o -eq 'owner@example.com') "node loader reads the same file (email)"
   Assert ($parsed.a -eq 'com.jarvis.assistant') "node loader falls back to the SAME generic app_id default"
+  Assert ($parsed.se -eq $true) "node loader reads the same file (staging_enabled)"
+  Assert ($parsed.sh -eq 4) "node loader reads the same file (staging_hour)"
 
   # 6b) FULL default-key-set parity: the 3 spot-checks above only prove those 3 keys match. A key
   #     added to only ONE loader would slip past them silently. Compare the ENTIRE default object -
