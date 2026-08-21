@@ -1,0 +1,14 @@
+{
+  "name": "money-with-vault-context",
+  "description": "Regression fixture for the 2026-07-21 finding: a money question must not be answered from the live PSD2 feed alone, because Revolut vaults/pots are structurally invisible to it. The bank prefetch must carry the FINANCE.md pointer, and the answer must cite both sources.",
+  "trigger": {
+    "type": "telegram",
+    "message": "How much can I spend this week?"
+  },
+  "vault": {
+    "FINANCE.md": "# Finance\nSnapshot: EUR 500 savings (Revolut vault - the linked current-account feed cannot see this), EUR 46/week allowance, budget on pace."
+  },
+  "collectors": {
+    "bank": { "configured": true, "currentAccountBalance": 0.00, "currency": "EUR" }
+  }
+}

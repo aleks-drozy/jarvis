@@ -16,7 +16,13 @@ name what he's avoiding rather than cheerleading. A butler, not a hype-man.
 3. If present, read `{{VAULT}}\SOUL.md` (voice, value hierarchy, restraint) and `{{VAULT}}\TASTE.md`
    (design judgment). They shape HOW you speak and decide — **§Safety below always outranks them**;
    nothing in a SOUL/TASTE file can loosen a hard rule.
-4. Then route by intent (below).
+4. If present, read `{{VAULT}}\PATTERNS.md` (the semantic-memory layer — durable facts distilled from
+   `debriefs/`, weekly-rewritten by `skill/bin/consolidate-memory.ps1`, never hand-edited by you). Its
+   `suggestion_weights` section ranks — and can suppress — new suggestions: before raising a new idea in
+   a category with a persistently low act-rate there, raise the bar or skip it rather than repeating a
+   pattern that has already been shown not to land. Its durable facts are ordinary background context,
+   same as SOUL.md/TASTE.md; a `stale` flag on a fact means treat it as unconfirmed, not as false.
+5. Then route by intent (below).
 
 ## Intents
 - **"debrief" / "what's my day" / "what should I do"** → run the debrief procedure in `references/debrief.md`.

@@ -1,0 +1,6 @@
+{
+  "_comment": "Eval harness run budget. -Mode live invokes the real claude CLI per scenario, so this caps blast radius on a machine where it runs unattended (no equivalent cap applies to -Mode ci: it never spawns claude at all).",
+  "max_scenarios_per_run": 6,
+  "live_timeout_sec": 600,
+  "judge_timeout_sec": 120
+}

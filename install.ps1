@@ -8,9 +8,9 @@
 #   1. Ensures ~/.jarvis/config.json exists (prompting or taking params for: vault path, projects root,
 #      job-search dir, owner email). This file holds PATHS AND AN EMAIL - never secrets; credentials
 #      live in separate DPAPI-encrypted files (see DEPENDENCIES.md).
-#   2. Renders the skill markdown: {{VAULT}} / {{BIN}} / {{JOB_SEARCH_DIR}} become YOUR configured
-#      paths (Claude follows literal paths best). Code (.ps1/.vbs/.js) is copied verbatim - it reads
-#      the same config at runtime.
+#   2. Renders the skill markdown: {{VAULT}} / {{BIN}} / {{JOB_SEARCH_DIR}} / {{JARVIS_HOME}} become
+#      YOUR configured paths (Claude follows literal paths best). Code (.ps1/.vbs/.js) is copied
+#      verbatim - it reads the same config at runtime.
 #   3. Mirrors the rendered skill into the Claude Code skills directory.
 # ASCII only (PS 5.1 reads .ps1 as ANSI).
 param(
@@ -64,7 +64,7 @@ foreach ($f in $mdFiles) {
   # -Encoding UTF8 on the READ is load-bearing: PS 5.1 defaults to ANSI, and reading UTF-8 markdown
   # (em dashes, emoji) as ANSI then re-writing UTF-8 mojibakes every non-ASCII character
   $raw = Get-Content -LiteralPath $f.FullName -Raw -Encoding UTF8
-  $rendered = $raw.Replace('{{VAULT}}', $cfg.vault_path).Replace('{{BIN}}', $binPath).Replace('{{JOB_SEARCH_DIR}}', $cfg.job_search_dir)
+  $rendered = $raw.Replace('{{VAULT}}', $cfg.vault_path).Replace('{{BIN}}', $binPath).Replace('{{JOB_SEARCH_DIR}}', $cfg.job_search_dir).Replace('{{JARVIS_HOME}}', (Join-Path $HOME '.jarvis'))
   if ($rendered -ne $raw) { Set-Content -LiteralPath $f.FullName -Value $rendered -Encoding UTF8 -NoNewline }
 }
 # hard fail on any placeholder that survived rendering - a half-rendered skill reads garbage paths

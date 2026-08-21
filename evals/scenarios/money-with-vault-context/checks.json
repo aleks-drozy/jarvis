@@ -1,0 +1,10 @@
+{
+  "checks": [
+    { "type": "must_match", "pattern": "FINANCE\\.md", "description": "the bank-scope note's FINANCE.md pointer is wired into the assembled prefetch (real Get-ChatBankScopeNote call)", "tiers": ["ci"] },
+    { "type": "must_match", "pattern": "Revolut vaults, pots or savings sub-accounts", "description": "the vault-exclusion wording is present verbatim in the assembled prompt", "tiers": ["ci"] },
+    { "type": "must_match", "pattern": "(?i)FINANCE\\.md", "description": "the reply cites FINANCE.md as a source", "tiers": ["live"] },
+    { "type": "must_not_match", "pattern": "(?i)\\byou (have|'ve got) (nothing|no money|EUR 0)\\b|\\bcannot afford anything\\b|\\bnothing to spend\\b", "description": "must not conclude \"nothing\" from the live feed's near-zero current-account balance alone (the exact 2026-07-21 regression)", "tiers": ["live"] },
+    { "type": "must_match", "pattern": "(?is)(EUR|\\u20ac)\\s?[\\d.,]+.*(EUR|\\u20ac)\\s?[\\d.,]+", "description": "at least two distinct EUR figures appear (deterministic proxy for citing both the live feed's number and FINANCE.md's number, ahead of the llm_judge tie-breaker)", "tiers": ["live"] },
+    { "type": "llm_judge", "criterion": "Does the reply contain BOTH a EUR figure attributed to the live bank feed (the near-zero current-account balance) AND a separate EUR figure attributed to FINANCE.md (the savings and/or weekly allowance)? Answer PASS if both distinct sourced figures are present anywhere in the reply; answer FAIL only if the reply uses just one of the two sources.", "description": "money answer is grounded in both the live feed and the vault, not the feed alone (mechanical, low-inference criterion to reduce judge noise on an otherwise-correct answer)", "tiers": ["live"] }
+  ]
+}

@@ -32,6 +32,13 @@ try {
   $jobHunter = Get-Content (Join-Path $target 'references\job-hunter.md') -Raw
   Assert ($jobHunter.Contains((Join-Path $tmp 'jobs'))) "job-hunter.md carries the configured job_search_dir"
 
+  # {{JARVIS_HOME}} renders to the real per-machine opportunity-store location (Get-OpportunityStorePath
+  # uses $HOME, not the vault path), so staging.md must never hardcode %USERPROFILE%\.jarvis
+  $stagingMd = Get-Content (Join-Path $target 'references\staging.md') -Raw
+  Assert ($stagingMd -notmatch '\{\{') "no unrendered placeholders in staging.md"
+  Assert ($stagingMd.Contains((Join-Path $HOME '.jarvis\opportunities.json'))) `
+    "staging.md carries the real opportunity store path derived from `$HOME"
+
   # code ships unrendered and complete: bin scripts + the hidden launcher present and byte-identical
   Assert (Test-Path (Join-Path $target 'bin\telegram-bot.ps1')) "bin scripts deployed"
   Assert (Test-Path (Join-Path $target 'bin\telegram-bot-hidden.vbs')) "hidden launcher deployed"

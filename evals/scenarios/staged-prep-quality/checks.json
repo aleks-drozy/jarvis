@@ -1,0 +1,10 @@
+{
+  "checks": [
+    { "type": "must_match", "pattern": "QUALIFIES: True", "description": "the real Test-StagingQualifies function accepts an interview-shaped trigger", "tiers": ["ci"] },
+    { "type": "must_match", "pattern": "(?s)Never invent\\s+experience, a project, a number, or a detail about the trigger itself", "description": "the grounding rule text is loaded into the assembled staging instructions", "tiers": ["ci"] },
+    { "type": "must_match", "pattern": "sources_read", "description": "the provenance-header field is required by the staging procedure", "tiers": ["ci"] },
+    { "type": "must_match", "pattern": "(?i)sources_read", "description": "the produced artifact carries the provenance header", "tiers": ["live"] },
+    { "type": "must_match", "pattern": "(?i)Riverstone Analytics", "description": "the artifact grounds itself in the fixture's actual trigger company", "tiers": ["live"] },
+    { "type": "llm_judge", "criterion": "Does the prep-sheet artifact ground every claim in the supplied fixture data (the JOB_SEARCH.md row and the JARVIS.md STAR-bank item) without inventing any new company detail, project, experience, or number that was not present in the fixture? Answer PASS only if nothing is fabricated.", "description": "no fabricated facts in the staged artifact (Priority-1 grounding tie-in)", "tiers": ["live"] }
+  ]
+}

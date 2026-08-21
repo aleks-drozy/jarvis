@@ -205,6 +205,32 @@ function Clear-OldClaudeLogs {
   } catch { }
 }
 
+function Get-StagedIndexBlock {
+  # Night Shift (skill/bin/stage-prep.ps1) writes overnight prep sheets to <vault>\outreach\staged\
+  # named YYYY-MM-DD-<slug>.md and never sends or links them itself - only a manifest entry is
+  # recorded. This is the debrief's OWN read-only index of what Night Shift staged in the last 48h, so
+  # the 08:30 note can LINK them; the debrief never regenerates their content (spec item 5).
+  # Best-effort: a missing/unreadable staged directory (Night Shift disabled, or nothing staged) is not
+  # an error - it just means an empty index, same restraint as everything else optional in this file.
+  param([string]$VaultPath, [datetime]$Now)
+  $dir = Join-Path $VaultPath 'outreach\staged'
+  if (-not (Test-Path $dir)) { return '' }
+  $cutoffDate = $Now.Date.AddDays(-2)   # last 48h, by the artifact's own date-prefixed filename
+  $files = @(Get-ChildItem -LiteralPath $dir -Filter '*.md' -File -ErrorAction SilentlyContinue |
+    Where-Object {
+      if ($_.Name -match '^(\d{4}-\d{2}-\d{2})-') {
+        try { [datetime]::ParseExact($Matches[1], 'yyyy-MM-dd', $null) -ge $cutoffDate } catch { $true }
+      } else {
+        # an unexpectedly-named file: fall back to its filesystem write time rather than silently
+        # dropping it from the index.
+        $_.LastWriteTime -ge $Now.AddHours(-48)
+      }
+    } | Sort-Object Name)
+  if ($files.Count -eq 0) { return '' }
+  $lines = @($files | ForEach-Object { "- $($_.Name)" })
+  return "Staged overnight by Night Shift (link these in the debrief - do NOT regenerate their content):`n" + ($lines -join "`n")
+}
+
 function Set-DebriefHeartbeat {
   # F3: positive delivery heartbeat. Called ONLY from the success path, ONLY after a channel send
   # has already returned without throwing (see the call site below) - never speculatively, never on
@@ -429,6 +455,13 @@ try {
     "Read your instructions at $skillDir\SKILL.md and $skillDir\references\debrief.md, then execute the " +
     "debrief procedure now for $today and WRITE the finished debrief to $note (overwrite if it already exists). " +
     "Obey the safety rules in SKILL.md. Finish by confirming the file was written."
+
+  # Night Shift index (spec item 5): if stage-prep.ps1 staged anything in the last 48h, tell Claude to
+  # LINK it, never regenerate it - the debrief and Night Shift must stay two separate reversible steps.
+  $stagedIndex = Get-StagedIndexBlock -VaultPath $vault -Now $runStart
+  if ($stagedIndex) {
+    $prompt += " $stagedIndex Add a short 'Staged overnight' line pointing at these file(s) (path only) in the debrief; do not open or regenerate them."
+  }
 
   # capture Claude's output so a bad run is diagnosable (not discarded). F5: bounded to 25 min so an
   # overrun throws here (caught below) instead of hanging until Windows's hard 30-min task kill.

@@ -1,0 +1,11 @@
+{
+  "name": "rejection-non-escalation",
+  "description": "A rejection is unactionable - the sweep must classify it correctly but must NOT escalate it to an immediate push. It waits for the 08:30 debrief, because an alarm that fires for the unactionable is an alarm that gets switched off.",
+  "trigger": { "type": "opportunity_sweep" },
+  "vault": {},
+  "collectors": {
+    "jobmail_alerts": [
+      { "from": "careers@northgatefinance.example", "subject": "Unfortunately, your application was not successful", "date": "2026-08-20T09:00:00" }
+    ]
+  }
+}
