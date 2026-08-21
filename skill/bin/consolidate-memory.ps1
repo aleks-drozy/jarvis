@@ -360,6 +360,122 @@ function Add-StaleFactFlags {
   return ($lines -join "`r`n")
 }
 
+# ---------- retroactive contradiction-checking (STEP 3 - instrumented, deterministic-only first
+# slice; research flags A-MEM-style contradiction detection "promising-not-proven", so zero agent
+# judgment sits in the decision path here - this is soft annotation only, computed fresh every run) ----------
+
+$script:ContradictionStopwords = @('that','this','with','from','have','been','alex','week','will','does','into','only','more')
+
+function Get-ContradictionCandidates {
+  # Pure. Walks '## Durable facts' bullets with the same section-state walk and
+  # '\(source: ([^()]+)\)' + citation-date machinery as Add-StaleFactFlags. A pair of fact lines is a
+  # candidate iff: shared-token count >= MinSharedTokens, the two lines' latest citation dates differ
+  # by >= MinDateGapDays, and the lines are not identical after whitespace-normalization.
+  param([string]$Text, [int]$MinSharedTokens = 3, [int]$MinDateGapDays = 28)
+  $candidates = New-Object System.Collections.Generic.List[object]
+  if (-not $Text) { return , $candidates.ToArray() }
+  $lines = $Text -split "`r?`n"
+  $inFacts = $false
+  $facts = New-Object System.Collections.Generic.List[object]
+  for ($i = 0; $i -lt $lines.Count; $i++) {
+    $line = $lines[$i]
+    if ($line.TrimEnd() -eq '## Durable facts') { $inFacts = $true; continue }
+    if ($inFacts -and $line.StartsWith('## ') -and $line.TrimEnd() -ne '## Durable facts') { $inFacts = $false }
+    if (-not $inFacts) { continue }
+    if (-not $line.TrimStart().StartsWith('-')) { continue }
+    $sourceMatch = [regex]::Match($line, '\(source: ([^()]+)\)')
+    if (-not $sourceMatch.Success) { continue }
+    $dateMatches = [regex]::Matches($sourceMatch.Groups[1].Value, '\d{4}-\d{2}-\d{2}')
+    if ($dateMatches.Count -eq 0) { continue }
+    $parsedDates = New-Object System.Collections.Generic.List[datetime]
+    foreach ($dm in $dateMatches) {
+      $d = [datetime]::MinValue
+      if ([datetime]::TryParseExact($dm.Value, 'yyyy-MM-dd', $null,
+            [System.Globalization.DateTimeStyles]::None, [ref]$d)) { $parsedDates.Add($d) }
+    }
+    if ($parsedDates.Count -eq 0) { continue }
+    $latest = ($parsedDates | Sort-Object)[$parsedDates.Count - 1]
+    # tokens computed with the citation span removed - the citation itself (filenames, dates) must
+    # never count as topical overlap between two facts.
+    $withoutCitation = $line.Substring(0, $sourceMatch.Index) + $line.Substring($sourceMatch.Index + $sourceMatch.Length)
+    $lowerNoCite = $withoutCitation.ToLowerInvariant()
+    $tokMatches = [regex]::Matches($lowerNoCite, '[a-z0-9]{4,}')
+    $tokSet = New-Object System.Collections.Generic.HashSet[string]
+    foreach ($tm in $tokMatches) {
+      if ($script:ContradictionStopwords -notcontains $tm.Value) { [void]$tokSet.Add($tm.Value) }
+    }
+    $normText = ($lowerNoCite -replace '\s+', ' ').Trim()
+    $facts.Add([pscustomobject]@{ Index = $i; Line = $line; Tokens = $tokSet; Date = $latest; NormText = $normText })
+  }
+  for ($a = 0; $a -lt $facts.Count; $a++) {
+    for ($b = $a + 1; $b -lt $facts.Count; $b++) {
+      $fa = $facts[$a]; $fb = $facts[$b]
+      # compared with each line's citation span already stripped (the citation differs whenever the
+      # two dates differ, so comparing the RAW line would make this check vacuous) - two re-citations
+      # of the exact same fact text, only the source date bumped, must never be flagged.
+      $normA = $fa.NormText
+      $normB = $fb.NormText
+      if ($normA -eq $normB) { continue }
+      $shared = 0
+      foreach ($t in $fa.Tokens) { if ($fb.Tokens.Contains($t)) { $shared++ } }
+      if ($shared -lt $MinSharedTokens) { continue }
+      $gap = [math]::Abs(($fa.Date - $fb.Date).Days)
+      if ($gap -lt $MinDateGapDays) { continue }
+      if ($fa.Date -le $fb.Date) { $older = $fa; $newer = $fb } else { $older = $fb; $newer = $fa }
+      $candidates.Add([pscustomobject]@{
+        OlderIndex  = $older.Index
+        NewerIndex  = $newer.Index
+        SharedTokens = $shared
+        DateGapDays = $gap
+        NewerDate   = $newer.Date.ToString('yyyy-MM-dd')
+      })
+    }
+  }
+  return , $candidates.ToArray()
+}
+
+function Add-ContradictionFlags {
+  # Pure text-in/object-out, no file I/O ever. (1) strips EVERY existing '(possibly contradicted ...)'
+  # span - agent-authored or stale-from-last-week alike, so no forged or outdated flag can survive;
+  # (2) re-derives candidates fresh from the stripped text; (3) appends the exact-format marker to the
+  # OLDER line of each pair; (4) returns { Text; ContradictionCount }.
+  param([string]$Text, [datetime]$Now, [int]$MinSharedTokens = 3, [int]$MinDateGapDays = 28)
+  if (-not $Text) { return [pscustomobject]@{ Text = $Text; ContradictionCount = 0 } }
+  $stripped = $Text -replace '\s*\(possibly contradicted[^()]*\)', ''
+  $candidates = Get-ContradictionCandidates -Text $stripped -MinSharedTokens $MinSharedTokens -MinDateGapDays $MinDateGapDays
+  $lines = $stripped -split "`r?`n"
+  $count = 0
+  foreach ($c in $candidates) {
+    $lines[$c.OlderIndex] = "$($lines[$c.OlderIndex]) (possibly contradicted -- see fact last evidenced $($c.NewerDate))"
+    $count++
+  }
+  return [pscustomobject]@{ Text = ($lines -join "`r`n"); ContradictionCount = $count }
+}
+
+function Add-WeeklyReportContradictionLine {
+  # Pure; appends one line inside the '## Weekly learning report' section (before the next '## '
+  # header, or at the very end if it is the last section). Always appended, including N=0 - a trend
+  # needs the zeros too.
+  param([string]$Text, [int]$Count)
+  if (-not $Text) { return $Text }
+  $line = "- $Count fact(s) flagged as possibly contradicted this week (computed in PowerShell; see PATTERNS.md annotations)."
+  $lines = $Text -split "`r?`n"
+  $sectionIdx = -1
+  for ($i = 0; $i -lt $lines.Count; $i++) {
+    if ($lines[$i].TrimEnd() -eq '## Weekly learning report') { $sectionIdx = $i; break }
+  }
+  if ($sectionIdx -lt 0) { return $Text }
+  $endIdx = $lines.Count
+  for ($j = $sectionIdx + 1; $j -lt $lines.Count; $j++) {
+    if ($lines[$j].StartsWith('## ')) { $endIdx = $j; break }
+  }
+  $newLines = New-Object System.Collections.Generic.List[string]
+  for ($i = 0; $i -lt $endIdx; $i++) { $newLines.Add($lines[$i]) }
+  $newLines.Add($line)
+  for ($i = $endIdx; $i -lt $lines.Count; $i++) { $newLines.Add($lines[$i]) }
+  return ($newLines -join "`r`n")
+}
+
 # ---------- headless agent invocation (bounded timeout, PID-file tree-kill - duplicated from
 # stage-prep.ps1's own Invoke-ClaudeGeneration for the identical reason it duplicates jarvis-debrief.ps1's:
 # this script also runs its whole body the instant it is invoked, so it cannot be dot-sourced safely) ----------
@@ -461,7 +577,7 @@ function Invoke-ConsolidationClaudeGeneration {
     "evidence updates or contradicts an older fact, REPLACE that line, do not keep both - the file is a " +
     "rewrite, not a forever-growing append log. Suggestion weights: one act-rate line per category, " +
     "computed directly from the ledger's times_raised/acted fields. Weekly learning report: EXACTLY 5 " +
-    "lines, plain facts, no narrative padding. Do NOT add any 'stale' flag yourself - that is computed " +
+    "lines, plain facts, no narrative padding. Do NOT add any 'stale' or 'possibly contradicted' flag yourself - both are computed " +
     "separately in PowerShell after you finish. " +
     "ABSOLUTE RULE: never create, edit, or delete anything under $VaultPath\debriefs\ - the episodic " +
     "layer is strictly read-only from this procedure, no exceptions. Finish by confirming the staging " +
@@ -531,6 +647,8 @@ function Invoke-WeeklyConsolidation {
     }
 
     $finalText = Add-StaleFactFlags -Text $candidateText -Now $Now -StaleWeeks $StaleWeeks
+    $contra = Add-ContradictionFlags -Text $finalText -Now $Now
+    $finalText = Add-WeeklyReportContradictionLine -Text $contra.Text -Count $contra.ContradictionCount
     $tmpPath = "$PatternsPath.tmp-$([guid]::NewGuid().ToString('N'))"
     Set-Content -Encoding UTF8 -LiteralPath $tmpPath -Value $finalText
     Move-Item -LiteralPath $tmpPath -Destination $PatternsPath -Force
@@ -539,7 +657,7 @@ function Invoke-WeeklyConsolidation {
     if ($LogPath) {
       try {
         Add-Content -Encoding UTF8 -Path $LogPath -Value `
-          "$($Now.ToString('s')) OK PATTERNS.md replaced ($($debriefFiles.Count) debrief(s) in window, $($ledger.Count) ledger entries)"
+          "$($Now.ToString('s')) OK PATTERNS.md replaced ($($debriefFiles.Count) debrief(s) in window, $($ledger.Count) ledger entries, contradictions flagged: $($contra.ContradictionCount))"
       } catch { }
     }
     return $true

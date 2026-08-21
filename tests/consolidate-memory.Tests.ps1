@@ -136,7 +136,8 @@ function Invoke-ConsolidationClaudeGeneration {
 # exercises the genuine pre-pass rather than a second stub.
 foreach ($fn in @('Get-SuggestionSlugs','Get-SuggestionCategory','ConvertFrom-SuggestionsMarkdown',
                    'Get-SuggestionEvidence','Test-SuggestionActed','Measure-SuggestionOutcomes',
-                   'Restore-PatternsIfTampered')) {
+                   'Restore-PatternsIfTampered','Get-ContradictionCandidates','Add-ContradictionFlags',
+                   'Add-WeeklyReportContradictionLine')) {
   . ([scriptblock]::Create((Extract-Fn $src $fn)))
 }
 
@@ -293,6 +294,92 @@ try {
 }
 
 Write-Host "consolidate-memory: BUG-1 staging-gate-bypass checks passed"
+
+# ============================================================================
+# Test 6: contradiction-checking pipeline order guarantee (STEP 3). Stub Add-ContradictionFlags with
+# a call counter BEFORE extracting Invoke-WeeklyConsolidation (same name-shadow convention as the
+# claude stub above), so the extracted orchestrator resolves to the stub. A schema-invalid stubbed
+# candidate must be REJECTED by the existing gate with the contradiction step NEVER having run - this
+# is the concrete proof that STEP 3 cannot be used to bypass or weaken the schema/hash-verify gate:
+# it sits strictly after both, and a rejected run never reaches it.
+# ============================================================================
+$script:ContradictionCallCount = 0
+function Add-ContradictionFlags {
+  param($Text, $Now, $MinSharedTokens, $MinDateGapDays)
+  $script:ContradictionCallCount++
+  return [pscustomobject]@{ Text = $Text; ContradictionCount = 0 }
+}
+. ([scriptblock]::Create((Extract-Fn $src 'Invoke-WeeklyConsolidation')))
+
+function Invoke-ConsolidationClaudeGeneration {
+  param($VaultPath, $SkillDir, $DebriefFiles, $LedgerJson, $TemplatePath, $StagingPath, $TimeoutSec, $LogPath)
+  # deliberately malformed: missing the '(source: ...)' citation on a fact line
+  $bad = (New-ValidPatternsText) -replace '\(source: debriefs/2026-08-17\.md\)', ''
+  Set-Content -Encoding UTF8 -LiteralPath $StagingPath -Value $bad
+}
+$root6 = Join-Path $env:TEMP ('jarvis-consolidation-t6-' + [guid]::NewGuid().ToString('N'))
+try {
+  $vault6 = New-ConsolidationFixture -Root $root6
+  $script:ContradictionCallCount = 0
+  $ok6 = Invoke-WeeklyConsolidation -Now ([datetime]'2026-08-20T21:00:00') -VaultPath $vault6 -SkillDir 'C:\fake-skill'
+  Assert (-not $ok6) "a schema-invalid stubbed candidate must still be rejected with the contradiction step wired in"
+  Assert ($script:ContradictionCallCount -eq 0) "Add-ContradictionFlags must NEVER run when the schema gate rejects the candidate - it sits strictly after the gate, so it cannot be used to bypass or weaken it (call count: $script:ContradictionCallCount)"
+} finally {
+  Remove-Item $root6 -Recurse -Force -ErrorAction SilentlyContinue
+}
+
+# ---- Test 7: real end-to-end - a valid candidate with an engineered contradicting pair -> the final
+#      PATTERNS.md carries the exact-format flag, the OK log line reports the count, and the weekly
+#      report carries the code-authored line. Uses the REAL Add-ContradictionFlags/
+#      Add-WeeklyReportContradictionLine (extracted fresh, undoing the stub above). ----
+foreach ($fn in @('Get-ContradictionCandidates','Add-ContradictionFlags','Add-WeeklyReportContradictionLine')) {
+  . ([scriptblock]::Create((Extract-Fn $src $fn)))
+}
+. ([scriptblock]::Create((Extract-Fn $src 'Invoke-WeeklyConsolidation')))
+
+function New-ContradictingPatternsText {
+  return @"
+# PATTERNS.md
+
+## Durable facts
+- residence permit application still not submitted. (source: debriefs/2026-07-05.md)
+- residence permit submitted and receipt received. (source: debriefs/2026-08-19.md)
+
+## Suggestion weights
+- portfolio-registration: 6 raised, 0 acted (0%)
+
+## Weekly learning report
+1. alpha-signal-lab re-raised again with zero action taken.
+2. No new durable facts contradicted this week.
+3. Suggestion weights computed from 1 ledger entry.
+4. Nothing acted on this week per the evidence corpus.
+5. Consolidation completed cleanly.
+"@
+}
+function Invoke-ConsolidationClaudeGeneration {
+  param($VaultPath, $SkillDir, $DebriefFiles, $LedgerJson, $TemplatePath, $StagingPath, $TimeoutSec, $LogPath)
+  Set-Content -Encoding UTF8 -LiteralPath $StagingPath -Value (New-ContradictingPatternsText)
+}
+$root7 = Join-Path $env:TEMP ('jarvis-consolidation-t7-' + [guid]::NewGuid().ToString('N'))
+try {
+  $vault7 = New-ConsolidationFixture -Root $root7
+  $logPath7 = Join-Path $root7 'consolidation.log'
+  $ok7 = Invoke-WeeklyConsolidation -Now ([datetime]'2026-08-20T21:00:00') -VaultPath $vault7 -SkillDir 'C:\fake-skill' -LogPath $logPath7
+  Assert $ok7 "a valid candidate with an engineered contradicting pair must still be accepted (schema is satisfied)"
+
+  $patternsText7 = Get-Content -LiteralPath (Join-Path $vault7 'PATTERNS.md') -Raw
+  Assert ($patternsText7 -match [regex]::Escape('(possibly contradicted -- see fact last evidenced 2026-08-19)')) `
+    "the written PATTERNS.md must carry the exact-format contradiction flag on the older fact"
+  Assert ($patternsText7 -match '1 fact\(s\) flagged as possibly contradicted this week') `
+    "the written PATTERNS.md's weekly learning report must carry the code-authored contradiction-count line"
+
+  $log7Text = Get-Content -LiteralPath $logPath7 -Raw
+  Assert ($log7Text -match 'contradictions flagged: 1') "the OK log line must report the contradiction count"
+} finally {
+  Remove-Item $root7 -Recurse -Force -ErrorAction SilentlyContinue
+}
+
+Write-Host "consolidate-memory: contradiction-checking pipeline checks passed"
 
 # ============================================================================
 # Source-level guard: the consolidation agent must never be granted Bash - blast-radius reduction
