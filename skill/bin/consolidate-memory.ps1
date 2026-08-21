@@ -226,6 +226,36 @@ function Measure-SuggestionOutcomes {
   return , $result.ToArray()
 }
 
+function Restore-PatternsIfTampered {
+  # BUG-1 guard (live sandbox finding 2026-08-20): a headless agent with Write/Edit tools once
+  # bypassed the staging gate and wrote malformed content STRAIGHT onto PatternsPath while the
+  # orchestrator "correctly" logged REJECTED - blind to the fact the protected file was destroyed.
+  # This is the technical enforcement the prompt instruction alone cannot provide: compare the
+  # current hash of PatternsPath to the pre-agent snapshot; on ANY mismatch, restore the backup
+  # (or delete the file if none existed before) and log a CRITICAL line, deliberately distinct
+  # from routine "REJECTED:" noise. Idempotent: after a restore the hashes match again, so a
+  # second call is a no-op. Returns $true when tampering was detected and repaired.
+  param([string]$PatternsPath, [string]$PreHash, [string]$BackupPath, [string]$LogPath, [datetime]$Now)
+  $postHash = $null
+  if (Test-Path -LiteralPath $PatternsPath) {
+    $postHash = (Get-FileHash -LiteralPath $PatternsPath -Algorithm SHA256).Hash
+  }
+  if ($postHash -eq $PreHash) { return $false }
+  if ($PreHash) {
+    Copy-Item -LiteralPath $BackupPath -Destination $PatternsPath -Force
+  } else {
+    # no PATTERNS.md existed before the agent ran - the agent's direct write is removed entirely
+    Remove-Item -LiteralPath $PatternsPath -Force -ErrorAction SilentlyContinue
+  }
+  if ($LogPath) {
+    try {
+      Add-Content -Encoding UTF8 -Path $LogPath -Value `
+        "$($Now.ToString('s')) CRITICAL: PATTERNS.md was modified outside the staging gate (agent wrote the real path directly) - previous content restored"
+    } catch { }
+  }
+  return $true
+}
+
 # ============================================================================
 # Part 2: episodic window + agent pass + schema-gated atomic write
 # ============================================================================
@@ -346,7 +376,7 @@ function Invoke-ClaudeGeneration {
       if ($dir) { Set-Location -LiteralPath $dir -ErrorAction Stop }
       if ($pidFile) { try { Set-Content -LiteralPath $pidFile -Value $PID -ErrorAction Stop } catch { } }
       # No WebSearch/WebFetch in --allowedTools - local data only (spec: OUT OF SCOPE for this sprint).
-      & claude -p $p --permission-mode acceptEdits --allowedTools "Read Write Edit Bash Glob Grep" --output-format json 2>&1
+      & claude -p $p --permission-mode acceptEdits --allowedTools "Read Write Edit Glob Grep" --output-format json 2>&1
     }
   )
   $pidFile = $null
@@ -465,6 +495,13 @@ function Invoke-WeeklyConsolidation {
   if (-not $DebriefsPath)     { $DebriefsPath      = Join-Path $VaultPath 'debriefs' }
 
   $stagingPath = "$PatternsPath.staged-$([guid]::NewGuid().ToString('N')).md"
+  $backupPath = "$PatternsPath.bak-$([guid]::NewGuid().ToString('N'))"
+  $preHash = $null
+  if (Test-Path -LiteralPath $PatternsPath) {
+    $preHash = (Get-FileHash -LiteralPath $PatternsPath -Algorithm SHA256).Hash
+    Copy-Item -LiteralPath $PatternsPath -Destination $backupPath -Force
+  }
+  $replaced = $false
   try {
     # NOT wrapped in @() - both return ,$array.ToArray(); see the comment on the
     # Get-GitLogEvidenceCorpus call site above.
@@ -477,6 +514,9 @@ function Invoke-WeeklyConsolidation {
     Invoke-ConsolidationClaudeGeneration -VaultPath $VaultPath -SkillDir $SkillDir -DebriefFiles $debriefFiles `
       -LedgerJson $ledgerJson -TemplatePath $templatePath -StagingPath $stagingPath -TimeoutSec $TimeoutSec `
       -LogPath $LogPath | Out-Null
+
+    Restore-PatternsIfTampered -PatternsPath $PatternsPath -PreHash $preHash -BackupPath $backupPath `
+      -LogPath $LogPath -Now $Now | Out-Null
 
     if (-not (Test-Path -LiteralPath $stagingPath)) {
       throw "agent did not write the staging candidate at $stagingPath"
@@ -494,6 +534,7 @@ function Invoke-WeeklyConsolidation {
     $tmpPath = "$PatternsPath.tmp-$([guid]::NewGuid().ToString('N'))"
     Set-Content -Encoding UTF8 -LiteralPath $tmpPath -Value $finalText
     Move-Item -LiteralPath $tmpPath -Destination $PatternsPath -Force
+    $replaced = $true
 
     if ($LogPath) {
       try {
@@ -503,12 +544,17 @@ function Invoke-WeeklyConsolidation {
     }
     return $true
   } catch {
+    if (-not $replaced) {
+      Restore-PatternsIfTampered -PatternsPath $PatternsPath -PreHash $preHash -BackupPath $backupPath `
+        -LogPath $LogPath -Now $Now | Out-Null
+    }
     if ($LogPath) {
       try { Add-Content -Encoding UTF8 -Path $LogPath -Value "$($Now.ToString('s')) REJECTED: $($_.Exception.Message)" } catch { }
     }
     return $false
   } finally {
     Remove-Item -LiteralPath $stagingPath -Force -ErrorAction SilentlyContinue
+    Remove-Item -LiteralPath $backupPath -Force -ErrorAction SilentlyContinue
   }
 }
 

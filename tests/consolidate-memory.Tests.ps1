@@ -135,7 +135,8 @@ function Invoke-ConsolidationClaudeGeneration {
 # (deterministic) implementation too, along with its own dependencies, so the orchestrator test
 # exercises the genuine pre-pass rather than a second stub.
 foreach ($fn in @('Get-SuggestionSlugs','Get-SuggestionCategory','ConvertFrom-SuggestionsMarkdown',
-                   'Get-SuggestionEvidence','Test-SuggestionActed','Measure-SuggestionOutcomes')) {
+                   'Get-SuggestionEvidence','Test-SuggestionActed','Measure-SuggestionOutcomes',
+                   'Restore-PatternsIfTampered')) {
   . ([scriptblock]::Create((Extract-Fn $src $fn)))
 }
 
@@ -207,6 +208,97 @@ try {
   Remove-Item $root2 -Recurse -Force -ErrorAction SilentlyContinue
 }
 
+# ---- Test 3: BUG-1 (live sandbox, 2026-08-20) - the agent cheats: bypasses the staging gate and
+#      writes malformed content STRAIGHT onto PatternsPath, never touching $StagingPath at all. The
+#      orchestrator's own staging-missing accounting says "REJECTED", but PatternsPath was destroyed
+#      underneath it. Restore-PatternsIfTampered must hash-verify and restore it regardless. ----
+function Invoke-ConsolidationClaudeGeneration {
+  param($VaultPath, $SkillDir, $DebriefFiles, $LedgerJson, $TemplatePath, $StagingPath, $TimeoutSec, $LogPath)
+  # simulates the live-sandbox cheat (2026-08-20): bypasses staging, writes garbage straight to PATTERNS.md
+  Set-Content -Encoding UTF8 -LiteralPath (Join-Path $VaultPath 'PATTERNS.md') -Value 'garbage - no headers, no citations'
+}
+$root3 = Join-Path $env:TEMP ('jarvis-consolidation-t3-' + [guid]::NewGuid().ToString('N'))
+try {
+  $vault3 = New-ConsolidationFixture -Root $root3
+  $existingPatterns3 = "# PATTERNS.md (pre-existing)`n`n## Durable facts`n- Pre-existing fact. (source: debriefs/2026-08-01.md)`n`n## Suggestion weights`n- other: 0 raised, 0 acted`n`n## Weekly learning report`n1. a`n2. b`n3. c`n4. d`n5. e`n"
+  $patternsPath3 = Join-Path $vault3 'PATTERNS.md'
+  Set-Content -Encoding UTF8 -LiteralPath $patternsPath3 -Value $existingPatterns3
+  $hashBefore3 = (Get-FileHash -LiteralPath $patternsPath3 -Algorithm SHA256).Hash
+
+  $logPath3 = Join-Path $root3 'consolidation.log'
+  $ok3 = Invoke-WeeklyConsolidation -Now ([datetime]'2026-08-20T21:00:00') -VaultPath $vault3 -SkillDir 'C:\fake-skill' -LogPath $logPath3
+  Assert (-not $ok3) "an agent that bypasses the staging gate and writes directly to PatternsPath must result in a failed run (return false)"
+
+  $hashAfter3 = (Get-FileHash -LiteralPath $patternsPath3 -Algorithm SHA256).Hash
+  Assert ($hashAfter3 -eq $hashBefore3) "PATTERNS.md must be restored byte-for-byte after a staging-gate bypass (hash mismatch means the corruption survived)"
+
+  Assert (Test-Path $logPath3) "a staging-gate bypass must be logged"
+  $log3Text = Get-Content -LiteralPath $logPath3 -Raw
+  Assert ($log3Text -match 'CRITICAL') "the log must carry a CRITICAL line for a staging-gate bypass, distinct from routine REJECTED noise (got: $log3Text)"
+  Assert ($log3Text -match 'outside the staging gate') "the CRITICAL line must explain what happened (got: $log3Text)"
+  Assert ($log3Text -match 'REJECTED') "the ordinary staging-missing REJECTED line must still be present alongside CRITICAL (got: $log3Text)"
+
+  $leftovers3 = @(Get-ChildItem -LiteralPath $vault3 -File -ErrorAction SilentlyContinue |
+    Where-Object { $_.Name -like 'PATTERNS.md.*' })
+  Assert ($leftovers3.Count -eq 0) "no leftover PATTERNS.md.* backup/staging file may remain after the restore (found: $($leftovers3.Name -join ', '))"
+} finally {
+  Remove-Item $root3 -Recurse -Force -ErrorAction SilentlyContinue
+}
+
+# ---- Test 4: first-run edge - same cheating stub, but NO pre-existing PATTERNS.md, so there is
+#      nothing to restore FROM - the agent's direct write must be removed entirely. ----
+$root4 = Join-Path $env:TEMP ('jarvis-consolidation-t4-' + [guid]::NewGuid().ToString('N'))
+try {
+  $vault4 = New-ConsolidationFixture -Root $root4
+  $patternsPath4 = Join-Path $vault4 'PATTERNS.md'
+  Assert (-not (Test-Path $patternsPath4)) "test fixture precondition: no pre-existing PATTERNS.md"
+
+  $logPath4 = Join-Path $root4 'consolidation.log'
+  $ok4 = Invoke-WeeklyConsolidation -Now ([datetime]'2026-08-20T21:00:00') -VaultPath $vault4 -SkillDir 'C:\fake-skill' -LogPath $logPath4
+  Assert (-not $ok4) "a first-run staging-gate bypass must result in a failed run (return false)"
+  Assert (-not (Test-Path $patternsPath4)) "with no pre-existing PATTERNS.md, the agent's direct write must be removed entirely, not left in place"
+
+  $log4Text = Get-Content -LiteralPath $logPath4 -Raw
+  Assert ($log4Text -match 'CRITICAL') "a first-run staging-gate bypass must also be logged CRITICAL (got: $log4Text)"
+} finally {
+  Remove-Item $root4 -Recurse -Force -ErrorAction SilentlyContinue
+}
+
+# ---- Test 5: throwing-agent tamper - the stub writes garbage to PatternsPath and then THROWS,
+#      proving the catch-side Restore-PatternsIfTampered call (not just the post-generation call) works. ----
+function Invoke-ConsolidationClaudeGeneration {
+  param($VaultPath, $SkillDir, $DebriefFiles, $LedgerJson, $TemplatePath, $StagingPath, $TimeoutSec, $LogPath)
+  Set-Content -Encoding UTF8 -LiteralPath (Join-Path $VaultPath 'PATTERNS.md') -Value 'garbage from a dying agent'
+  throw 'simulated agent failure'
+}
+$root5 = Join-Path $env:TEMP ('jarvis-consolidation-t5-' + [guid]::NewGuid().ToString('N'))
+try {
+  $vault5 = New-ConsolidationFixture -Root $root5
+  $existingPatterns5 = "# PATTERNS.md (pre-existing)`n`n## Durable facts`n- Pre-existing fact. (source: debriefs/2026-08-01.md)`n`n## Suggestion weights`n- other: 0 raised, 0 acted`n`n## Weekly learning report`n1. a`n2. b`n3. c`n4. d`n5. e`n"
+  $patternsPath5 = Join-Path $vault5 'PATTERNS.md'
+  Set-Content -Encoding UTF8 -LiteralPath $patternsPath5 -Value $existingPatterns5
+  $hashBefore5 = (Get-FileHash -LiteralPath $patternsPath5 -Algorithm SHA256).Hash
+
+  $logPath5 = Join-Path $root5 'consolidation.log'
+  $ok5 = Invoke-WeeklyConsolidation -Now ([datetime]'2026-08-20T21:00:00') -VaultPath $vault5 -SkillDir 'C:\fake-skill' -LogPath $logPath5
+  Assert (-not $ok5) "a throwing agent that tampered with PatternsPath must result in a failed run (return false)"
+
+  $hashAfter5 = (Get-FileHash -LiteralPath $patternsPath5 -Algorithm SHA256).Hash
+  Assert ($hashAfter5 -eq $hashBefore5) "the catch-side restore must also repair PatternsPath byte-for-byte after a throwing agent"
+
+  $log5Text = Get-Content -LiteralPath $logPath5 -Raw
+  Assert ($log5Text -match 'CRITICAL') "the catch-side restore path must also log CRITICAL (got: $log5Text)"
+} finally {
+  Remove-Item $root5 -Recurse -Force -ErrorAction SilentlyContinue
+}
+
+Write-Host "consolidate-memory: BUG-1 staging-gate-bypass checks passed"
+
+# ============================================================================
+# Source-level guard: the consolidation agent must never be granted Bash - blast-radius reduction
+# so a cheating agent cannot shell out to bypass file-write protections either.
+# ============================================================================
+Assert ($src -notmatch '--allowedTools "[^"]*Bash') "consolidation agent must not be granted Bash"
 
 # ============================================================================
 # Skill-load assertion: SKILL.md and debrief.md must reference PATTERNS.md by name, so both the
