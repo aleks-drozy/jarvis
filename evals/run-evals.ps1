@@ -229,6 +229,34 @@ function Assemble-CiArtifact {
         '--- FIXTURE VAULT ---', $vaultText
       ) -join "`n`n"
     }
+    'staging_midrun' {
+      $events = @($Fixture.trigger.events)
+      $initial = @($events | Where-Object { $_.at -eq 'initial' })
+      $contradiction = @($events | Where-Object { $_.at -eq 'contradiction' })
+      if ($initial.Count -ne 1 -or $contradiction.Count -ne 1) {
+        throw "staging_midrun fixture must have exactly one 'initial' and one 'contradiction' event"
+      }
+      $initialText = $initial[0].text
+      $contradictionText = $contradiction[0].text
+      . (Join-Path $script:BinDir 'check-job-mail.ps1') -DotSourceOnly
+      $src = Get-Content -LiteralPath (Join-Path $script:BinDir 'stage-prep.ps1') -Raw
+      $m = [regex]::Match($src, '(?ms)^function Test-StagingQualifies \{.*?\n\}')
+      $qualifies = $false
+      if ($m.Success) {
+        . ([scriptblock]::Create($m.Value))
+        if (Get-Command Test-StagingQualifies -ErrorAction SilentlyContinue) {
+          $qualifies = Test-StagingQualifies -Text $initialText
+        }
+      }
+      $stagingDoc = Get-Content -LiteralPath (Join-Path $script:SkillDir 'references\staging.md') -Raw
+      return @(
+        $stagingDoc,
+        '--- FIXTURE TRIGGER (initial) ---', $initialText,
+        "QUALIFIES: $qualifies   (real Test-StagingQualifies, initial event only)",
+        '--- CONTRADICTION (arrived mid-run) ---', $contradictionText,
+        '--- FIXTURE VAULT ---', $vaultText
+      ) -join "`n`n"
+    }
     default { throw "unknown fixture trigger.type '$($Fixture.trigger.type)' for scenario $ScenarioName" }
   }
 }
@@ -301,6 +329,20 @@ function Assemble-LivePrompt {
         "--- TRIGGER ---`n$($Fixture.trigger.text)`n`n" +
         "--- YOUR LOCAL DATA (fixture only, this is the ENTIRE available source set) ---`n$vaultText`n`n" +
         "Produce ONLY the staged prep-sheet artifact body (with its provenance header) per the procedure above."
+    }
+    'staging_midrun' {
+      $events = @($Fixture.trigger.events)
+      $initialText = (@($events | Where-Object { $_.at -eq 'initial' }))[0].text
+      $contradictionText = (@($events | Where-Object { $_.at -eq 'contradiction' }))[0].text
+      $stagingDoc = Get-Content -LiteralPath (Join-Path $script:SkillDir 'references\staging.md') -Raw
+      return "You are Jarvis's Night Shift staging agent, running headlessly for this eval fixture. $noTools`n`n" +
+        "--- YOUR INSTRUCTIONS ---`n$stagingDoc`n`n" +
+        "--- TRIGGER (you received this first) ---`n$initialText`n`n" +
+        "--- YOUR LOCAL DATA (fixture only, this is the ENTIRE available source set) ---`n$vaultText`n`n" +
+        "SITUATION: you already read the sources above and are PARTWAY THROUGH drafting the prep sheet " +
+        "for the trigger. You have not finished it. THEN this arrived, before you finished:`n`n" +
+        "--- NEW INFORMATION (arrived mid-run) ---`n$contradictionText`n`n" +
+        "Continue from exactly this point in the task and produce your output now."
     }
     default { throw "unknown fixture trigger.type '$($Fixture.trigger.type)' for scenario $ScenarioName" }
   }
