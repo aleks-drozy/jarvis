@@ -2,7 +2,7 @@
 
 [![tests](https://github.com/aleks-drozy/jarvis/actions/workflows/tests.yml/badge.svg)](https://github.com/aleks-drozy/jarvis/actions/workflows/tests.yml)
 
-**A personal automation system that runs unattended on Windows.** Four scheduled tasks, a
+**A personal automation system that runs unattended on Windows.** Four scheduled tasks (two more ship opt-in, off by default), a
 read-only PSD2 open-banking feed, local speech-to-text, and a self-only Telegram bridge, wired
 to a Claude Code agent skill. At 08:30 every morning it assembles a briefing from my repos, my
 inbox, my calendar and my bank, writes it to a Markdown vault, and pushes it to my phone. Nobody
@@ -49,6 +49,7 @@ If you are skimming, these are the parts that are not a weekend of prompting.
 Windows Task Scheduler (daily 08:30; WakeToRun from sleep, StartWhenAvailable catch-up after shutdown)
         |
 jarvis-debrief.ps1 ------ headless run guard: the note must be FRESHLY written or nothing is sent
+        |                 Send-FailureAlert: a failed run pushes a Telegram alert naming the failure
         |                                   |
 claude -p (agent skill) --> writes briefing --> delivery (CONFIG debrief_delivery, self-only)
    |         |                                    |-- telegram-bot.ps1 -> Telegram -> my phone (chunked)
@@ -75,6 +76,18 @@ Windows Task Scheduler (hourly)
 check-opportunities.ps1 --> sweeps job mail for OPEN DOORS only (assessment, interview, offer)
         |                   pushes an alarm, re-reminds daily until cleared from the phone
         +-- opportunity-store.ps1      persistence, id-seed hashing, corrupt-store recovery
+        +-- deferred-intents.ps1       "someday" utterances, code-verified, resurfaced via this alarm
+
+Windows Task Scheduler (daily <staging_hour>:30, OPT-IN, off by default)
+        |
+stage-prep.ps1 --> Night Shift: stages prep sheets for career triggers (interview /
+                   assessment / deadline, next 48h) from already-collected local data
+                   to <vault>/outreach/staged/; nothing sent, nothing applied
+
+Windows Task Scheduler (weekly, Sunday 21:00, OPT-IN, off by default)
+        |
+consolidate-memory.ps1 --> rewrites PATTERNS.md from the trailing week of debriefs;
+                           contradiction flags computed in PowerShell, not by the model
 
 Electron companion (app/, optional logon-scheduled autostart, or launched by hand)
         tray + always-resident orb + Summon HUD + dashboard
@@ -135,6 +148,17 @@ confident, false story about itself and wrote it into my own notes. Fixed with a
 The general rule this project runs on: **a miss is allowed, a quiet miss is not.** A genuinely late
 briefing now stamps itself with the cause, derived from `Win32_OperatingSystem.LastBootUpTime`
 (powered off versus asleep).
+
+### The six days of silence
+
+Between 2026-08-09 and 2026-08-15 an API 403 broke briefing generation for six days straight. The
+fail-closed design worked exactly as built: every run logged "run FAILED" and left a "Debrief
+FAILED" stub instead of faking a morning. But nothing pushed that off-machine, so six days of
+correctly-detected failures reached my phone as silence - indistinguishable from a quiet week.
+`Send-FailureAlert` in `jarvis-debrief.ps1` closes that gap: a failed run now pushes a Telegram
+message naming the failure, deliberately dumb by design so the alert path cannot itself grow a
+failure mode. Fail-closed is necessary; it is not sufficient. A system that detects its own failure
+and tells no one has still failed silently.
 
 ### The rest of the scar tissue
 
@@ -207,6 +231,18 @@ vault, backed by a gitleaks scan of the full git history in CI.
 extracting deadlines from message bodies, and that this is a deliberate change to a safety rule, so
 it was refused there rather than smuggled in as part of a feature. The refusal lives at the point of
 temptation, in the file where someone would next be tempted.
+
+### The deferred-intent ledger
+
+A debrief agent reads my own notes every morning and sometimes sees a throwaway "I should really
+renew my residence permit before October" that nobody ever turned into a task.
+`skill/bin/deferred-intents.ps1` is the memory for exactly that class of utterance, on the same
+trust split as everything else here: **the agent proposes, code enforces.** The agent may only
+append candidates to one staging file; code alone verifies the quoted utterance exists verbatim on
+disk in the cited vault file, bounds how many can land per run, owns the ids and dedupe, and
+decides when an intent is promoted into the existing opportunity alarm for resurfacing. The agent
+never touches the ledger itself, the opportunity store, or Telegram. The records carry verbatim
+personal utterances, so they live in `~/.jarvis/` - local only, never the vault, never the repo.
 
 ---
 
@@ -288,6 +324,33 @@ module has been live since 2026-07-14 and reports its state through a heartbeat 
 
 First scaffolded against GoCardless Bank Account Data, which turned out to have closed to new
 signups. Rebuilt against Enable Banking the same day.
+
+---
+
+## Night Shift and weekly consolidation
+
+Two further scheduled tasks ship in the repo, both **opt-in and off by default**
+(`staging_enabled` and `consolidation_enabled` in `~/.jarvis/config.json` both default to false,
+and neither is enabled on the reference machine yet - built, tested, deployed, dormant).
+
+**Night Shift** (`skill/bin/stage-prep.ps1`, runs at `staging_hour`:30, default 03:30) scans the
+next 48 hours of calendar events and the open opportunity store for career triggers - an
+interview, an assessment, an application deadline - and for each one invokes the agent headlessly
+over **already-collected local data** (the tracker, prior debriefs, the opportunity store; no new
+web access is granted) to write one prep-sheet artifact to `outreach/staged/` in the vault. It
+gates at the output boundary: nothing is sent, nothing is applied, the calendar stays read-only,
+and a manifest entry is recorded only after a successful write so a crash cannot double-stage. It
+reuses the same mail-subject classifier the hourly sweep already trusts, so the two cannot drift
+on what counts as an interview.
+
+**Weekly consolidation** (`skill/bin/consolidate-memory.ps1`, Sundays 21:00) rewrites
+`PATTERNS.md` - the agent's semantic memory - from the trailing week of debriefs plus a
+suggestion-outcomes ledger, so working memory does not just grow forever. The episodic `debriefs/`
+files stay read-only. Retroactive contradiction-checking runs here too: when a newer fact line
+conflicts with an older one, the **older** line is annotated "possibly contradicted" with the date
+of the newer evidence. That check is deterministic token-overlap computed in PowerShell; the model
+is explicitly forbidden from adding the flags itself, because a model grading its own memory for
+contradictions is the kind of assertion this repo does not accept.
 
 ---
 
@@ -408,6 +471,22 @@ The honest claim is: **no executable source hardcodes my machine paths**, the in
 
 ---
 
+## Behavioral evals
+
+The suites above prove the code; `evals/run-evals.ps1` grades the model's judgment, which is the
+actual product and the part deterministic assertions cannot reach. It runs in two tiers. `-Mode
+ci` touches no network and never invokes the model: it calls the real production
+prompt-assembly functions against fixture inputs and regex-checks the assembled text, and it runs
+in CI on every pull request like any other suite. `-Mode live` is local-only: it invokes `claude`
+headlessly per scenario with `--allowedTools ""` - no tool use at all, because giving a grading
+run real tools would widen blast radius for no benefit - grades deterministically first, uses an
+LLM judge only to break ties a regex cannot decide, and writes dated results to `evals/results/`.
+The scenario I care most about is mid-execution abstention: a required input goes missing partway
+through a run, and the passing behavior is to stop and say so rather than guess - the failure mode
+a unit test cannot catch, because nothing throws.
+
+---
+
 ## Does it actually run
 
 - **Four registered Windows scheduled tasks**: the 08:30 debrief, a 3-minute Telegram poller, an
@@ -458,6 +537,8 @@ drift apart.
 - `app/` is the Electron companion (tray, orb, Summon HUD, dashboard).
 - `scripts/` holds Task Scheduler registration and one-time setup helpers.
 - `tests/` holds the suites described above.
+- `evals/` holds the behavioral eval harness and its scenarios (see above). Dev-time, not part of
+  the runtime architecture.
 
 Personal memory (goals, trackers, briefings) lives in a private vault **outside** this repo, and
 secrets live DPAPI-encrypted in `~/.jarvis/`. Neither is ever committed. See `SECURITY.md` for
@@ -539,5 +620,7 @@ Feature maturity, honestly tiered:
 - **Battle-tested** (has survived a real incident documented above): the morning briefing, job-mail
   classification, the Telegram bridge, the safety locks.
 - **Works, in daily use:** the bank feed, the opportunity alarm, the phone chat, interview prep,
-  voice, the fitness log.
+  voice, the fitness log, the failure alert, the deferred-intent ledger.
 - **Experimental** (instruction-level, tuned by use): the proactivity gate, the Sunday retrospective.
+- **Built, dormant** (deployed and tested, off by default, not yet opted into on the reference
+  machine): Night Shift staging, weekly memory consolidation.
