@@ -17,7 +17,7 @@ artifact rather than guessing.
 ## 1. Read ONLY already-collected local sources - no network
 - `{{VAULT}}\JOB_SEARCH.md` - find the tracker row for this trigger (company/role/status/link).
 - `{{VAULT}}\outreach\` - any prior draft, follow-up, or note already written for this company/role.
-- The opportunity store (if the trigger's source is `opportunity`): `%USERPROFILE%\.jarvis\opportunities.json`
+- The opportunity store (if the trigger's source is `opportunity`): `{{JARVIS_HOME}}\opportunities.json`
   - read-only, find the record by its id.
 - Recent notes in `{{VAULT}}\debriefs\` - anything already said about this trigger.
 - `{{VAULT}}\JARVIS.md` - his story (Maynooth CS & SE 2.1, DLT Capital quant research/engineering,
