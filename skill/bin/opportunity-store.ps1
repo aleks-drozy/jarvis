@@ -109,7 +109,9 @@ function Write-OpportunityStore {
 function Add-Opportunity {
   # Returns @{ Records = <updated>; IsNew = <bool> }. IsNew drives the immediate push, so the
   # already-seen path must be exact - see Get-OpportunityId.
-  param($Records, [string]$From, [string]$Subject, [string]$Date, [datetime]$Now)
+  # -Type is additive (default 'email' - every existing caller/mail-derived opportunity is unchanged);
+  # the deferred-intent ledger (deferred-intents.ps1) is the first caller to pass 'deferred_intent'.
+  param($Records, [string]$From, [string]$Subject, [string]$Date, [datetime]$Now, [string]$Type = 'email')
   $list = @($Records)
   $id = Get-OpportunityId -From $From -Subject $Subject -Date $Date
   if (@($list | Where-Object { $_.Id -eq $id }).Count -gt 0) {
@@ -123,6 +125,7 @@ function Add-Opportunity {
     Status     = 'open'
     FirstSeen  = $Now.ToString('s')
     LastPushed = $Now.ToString('s')
+    Type       = $Type
   }
   return @{ Records = $list; IsNew = $true }
 }

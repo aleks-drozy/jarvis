@@ -39,8 +39,13 @@ function Get-OpportunityMaxMessages {
 
 function Format-OpportunityPush {
   # Composed here, from variables, never by splicing a subject into a command line.
+  # A deferred_intent record (see deferred-intents.ps1) uses a different lead line - both first push and
+  # reminder - because it was never an email at all; body/footer are unchanged, so the existing
+  # "done <id>" / "ignore <id>" phone-clear flow (telegram-bot.ps1) works with zero changes.
   param($Record, [switch]$Reminder)
-  $lead = if ($Reminder) { 'Still open, Sir' } else { 'A door just opened, Sir' }
+  $lead = if ($Record.Type -eq 'deferred_intent') {
+    'You mentioned this once, Sir'
+  } elseif ($Reminder) { 'Still open, Sir' } else { 'A door just opened, Sir' }
   return @"
 $lead.
 
@@ -72,7 +77,7 @@ function Invoke-OpportunitySweep {
   # existing test) simply ignores the extra named arguments (verified empirically) so this is additive.
   param(
     [datetime]$Now = (Get-Date), [string]$StorePath = '', [int]$SinceHours = 24, [int]$MaxMessages = 0,
-    [string]$SweepStatePath = '', [string]$HeartbeatPath = '',
+    [string]$SweepStatePath = '', [string]$HeartbeatPath = '', [string]$DeferredIntentStorePath = '',
     [scriptblock]$MailFetcher = $null,
     [scriptblock]$Sender = $null,
     [scriptblock]$CredResolver = $null
@@ -95,9 +100,11 @@ function Invoke-OpportunitySweep {
   $callerMaxMessages  = $MaxMessages
 
   . (Join-Path $BIN 'opportunity-store.ps1') -DotSourceOnly
+  . (Join-Path $BIN 'deferred-intents.ps1') -DotSourceOnly
   if (-not $StorePath)      { $StorePath      = Get-OpportunityStorePath }
   if (-not $SweepStatePath) { $SweepStatePath = Get-OpportunitySweepStatePath }
   if (-not $HeartbeatPath)  { $HeartbeatPath  = Get-OpportunityHeartbeatPath }
+  if (-not $DeferredIntentStorePath) { $DeferredIntentStorePath = Get-DeferredIntentStorePath }
   $sent = 0
   $sweepOk = $false
   $sweepError = $null
@@ -161,6 +168,22 @@ function Invoke-OpportunitySweep {
 
     # One reminder per morning for anything still open. Hour gate so the sweep does not wake him at 03:00.
     if ($Now.Hour -ge 8) {
+      # Deferred-intent promotion (STEP 2): due "someday" utterances become opportunity records here,
+      # inside the same hour gate, so they flow through the EXISTING reminder push loop below - one
+      # outbound seam, restraint (hour gate + one promotion per sweep + one reminder per day) enforced
+      # in exactly one place. Own -WasCorrupt: a corrupt deferred store quarantines itself and skips
+      # promotion this run WITHOUT touching the opportunity store or its own sweep-success state.
+      $deferredWasCorrupt = $false
+      $deferredIntents = @(Read-DeferredIntentStore -Path $DeferredIntentStorePath -WasCorrupt ([ref]$deferredWasCorrupt))
+      if (-not $deferredWasCorrupt) {
+        $promo = Add-DeferredIntentPromotions -OppRecords $records -Intents $deferredIntents -Now $Now
+        if ($promo.PromotedCount -gt 0) {
+          $records = $promo.OppRecords
+          if (-not $wasCorrupt) { Write-OpportunityStore -Records $records -Path $StorePath }
+          Write-DeferredIntentStore -Records $promo.Intents -Path $DeferredIntentStorePath
+        }
+      }
+
       foreach ($due in (Get-OpportunitiesNeedingReminder -Records $records -Now $Now)) {
         $text = Format-OpportunityPush -Record $due -Reminder
         if ($Sender) { & $Sender -Text $text -Cred $cred | Out-Null } else { Send-Telegram -Text $text -Cred $cred | Out-Null }

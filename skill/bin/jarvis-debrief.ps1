@@ -463,6 +463,14 @@ try {
     $prompt += " $stagedIndex Add a short 'Staged overnight' line pointing at these file(s) (path only) in the debrief; do not open or regenerate them."
   }
 
+  # Deferred-intent ledger (STEP 2): ask the agent to propose at most 3 "someday" utterances it noticed
+  # while reading today's sources, to a staging file whose path comes from the SAME function used below
+  # to merge it - the code-level kill for the staging-filename-mismatch bug class found live this
+  # session. See deferred-intents.ps1 for the enforcement gate (Test-DeferredIntentCandidate).
+  . (Join-Path $PSScriptRoot 'deferred-intents.ps1') -DotSourceOnly
+  $deferredStaging = Get-DeferredIntentStagingPath -VaultPath $vault -Date $today
+  $prompt += ' ' + (Get-DeferredIntentPromptBlock -StagingPath $deferredStaging)
+
   # capture Claude's output so a bad run is diagnosable (not discarded). F5: bounded to 25 min so an
   # overrun throws here (caught below) instead of hanging until Windows's hard 30-min task kill.
   # -LogPath/-RunStamp let Invoke-ClaudeGeneration itself best-effort log whatever PARTIAL output
@@ -516,6 +524,15 @@ try {
     try {
       Set-DebriefHeartbeat -Date $today -Channel ($delivery.Sent -join '+') -HeartbeatFile $heartbeatFile
     } catch { }
+
+    # Deferred-intent merge (STEP 2): best-effort, own try/catch - a ledger failure must NEVER break the
+    # debrief that already, genuinely, succeeded above.
+    try {
+      $m = Merge-DeferredIntentCandidates -StagingPath $deferredStaging -StorePath (Get-DeferredIntentStorePath) -VaultPath $vault -Now $runStart
+      "$($runStart.ToString('s')) deferred-intents: $($m.Proposed) proposed, $($m.Accepted) accepted, $($m.Rejected) rejected" | Add-Content $runLog
+    } catch {
+      "$($runStart.ToString('s')) deferred-intents merge failed (non-fatal): $($_.Exception.Message)" | Add-Content $runLog
+    }
   }
   if ($delivery.Errors.Count -gt 0) {
     # At least one requested channel failed. Throw so the outer catch below logs a loud FAILED
