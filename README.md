@@ -379,13 +379,13 @@ single-instance lock makes running it either way safe.
 
 ## Tests, and what they actually guarantee
 
-42 suites: 41 native PowerShell suites (`tests/*.Tests.ps1`, including the shim below, 6,227 lines) and
+42 suites: 41 native PowerShell suites (`tests/*.Tests.ps1`, including the shim below, 6,371 lines) and
 one Node suite ([`tests/livestate.node.js`](https://github.com/aleks-drozy/jarvis/blob/master/tests/livestate.node.js), 219 lines).
 `tests/livestate.Tests.ps1` is a 6-line shim that only shells out to the Node suite so the
 PowerShell-child CI harness below can invoke it too - it is still counted among the 41, because it is
 its own `tests/*.Tests.ps1` file with its own `ALL PASS` line, even though the assertions it triggers
 live in the Node file. No framework, no
-Pester. Each real suite defines its own `Assert` and prints `<name>: ALL PASS`. 1,174 `Assert` call sites
+Pester. Each real suite defines its own `Assert` and prints `<name>: ALL PASS`. 1,200 `Assert` call sites
 across the suites, and more at runtime because loops re-run assertions over parameter
 tables.
 
@@ -447,7 +447,7 @@ The repair, in
   comment-stripped view; `--allowedTools` must be present in the comment-stripped view and absent from
   the code-only view; and the MCP payload literal must be absent from the code-only view too.
 
-`tests/telegram-chat.Tests.ps1` is 1,660 lines, larger than the 901-line
+`tests/telegram-chat.Tests.ps1` is 1,804 lines, larger than the 1,029-line
 [`skill/bin/telegram-chat.ps1`](https://github.com/aleks-drozy/jarvis/blob/master/skill/bin/telegram-chat.ps1)
 it tests.
 
