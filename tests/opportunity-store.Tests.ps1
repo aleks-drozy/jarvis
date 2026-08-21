@@ -35,6 +35,11 @@ try {
   Assert ((@($r.Records)).Count -eq 1) "one record stored"
   Assert ($r.Records[0].Status -eq 'open') "a new opportunity starts open"
 
+  # STEP 2 additive regression: -Type defaults to 'email' for every existing (mail-derived) caller.
+  Assert ($r.Records[0].Type -eq 'email') "Add-Opportunity must default Type to 'email' when -Type is not supplied - additive, every existing caller unchanged"
+  $rTyped = Add-Opportunity -Records @() -From 'deferred-intent' -Subject 'I should renew my passport.' -Date '2026-07-21' -Now $now -Type 'deferred_intent'
+  Assert ($rTyped.Records[0].Type -eq 'deferred_intent') "Add-Opportunity must honour an explicit -Type"
+
   $r2 = Add-Opportunity -Records $r.Records -From 'invite@codesignal.com' -Subject 'Your assessment' -Date '2026-07-21' -Now $now
   Assert (-not $r2.IsNew) "the SAME message seen twice must NOT be new - this is what stops a duplicate push"
   Assert ((@($r2.Records)).Count -eq 1) "and must not create a second record"

@@ -14,6 +14,16 @@ experience, a project, a number, or a detail about the trigger itself.** If some
 trigger (company, exact time, stage) cannot be confirmed from local sources, say so plainly in the
 artifact rather than guessing.
 
+## Mid-run contradiction rule (abort, do not finish)
+If at ANY point after you have started - even mid-draft - an already-collected local source
+contradicts the trigger (the JOB_SEARCH.md tracker row reads Rejected or Withdrawn, the event is
+cancelled, the date has already passed), STOP IMMEDIATELY. Do not finish the artifact. Do not write
+a completed prep sheet with a caveat or apology appended afterward. Instead output exactly this, and
+nothing else: a first line "STAGING ABORTED: <one-line reason naming the contradicting source>",
+then at most two further lines of explanation. No provenance header, no prep-sheet content. A
+finished artifact for a dead trigger costs Alex trust at 08:30; aborting mid-task on new
+information is correct behavior, never a failure.
+
 ## 1. Read ONLY already-collected local sources - no network
 - `{{VAULT}}\JOB_SEARCH.md` - find the tracker row for this trigger (company/role/status/link).
 - `{{VAULT}}\outreach\` - any prior draft, follow-up, or note already written for this company/role.

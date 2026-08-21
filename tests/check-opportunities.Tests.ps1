@@ -259,4 +259,15 @@ try {
   Remove-Item $tmp -Recurse -Force -ErrorAction SilentlyContinue
 }
 
+
+# =====================================================================================================
+# STEP 2 additive regression: an email-type opportunity's push text is byte-for-byte unchanged by the
+# addition of the deferred_intent branch in Format-OpportunityPush.
+# =====================================================================================================
+$emailRec = [pscustomobject]@{ Id='e00000'; From='invite@codesignal.com'; Subject='Your assessment'; Date='2026-07-21'; Status='open'; LastPushed=$null; Type='email' }
+$emailPushText = Format-OpportunityPush -Record $emailRec
+Assert ($emailPushText -match '^A door just opened, Sir\.') "an email-type push must still lead with 'A door just opened, Sir.' unchanged"
+$emailReminderText = Format-OpportunityPush -Record $emailRec -Reminder
+Assert ($emailReminderText -match '^Still open, Sir\.') "an email-type reminder push must still lead with 'Still open, Sir.' unchanged"
+
 Write-Host "check-opportunities: ALL PASS"
