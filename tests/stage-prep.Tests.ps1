@@ -246,13 +246,16 @@ try {
   Assert ($manifest5Records.Count -eq 1) "the manifest must still record exactly one entry"
   $recordedPath = $manifest5Records[0].ArtifactPath
   Assert ($recordedPath -match 'renamed-by-agent\.md$') "the manifest must record the artifact's ACTUAL path, not the path that was never written (got $recordedPath)"
-  # Resolve through the filesystem provider (like the code's own Get-ChildItem .FullName does), not a
-  # raw string built from $env:TEMP - on some hosts (observed on the GitHub Actions Windows runner,
-  # account "runneradmin") $env:TEMP is reported in 8.3 short-path form (...\RUNNER~1\...) while
-  # Get-ChildItem's .FullName resolves and returns the long form (...\runneradmin\...) for the
-  # identical real directory. Same class as tests/claude-generation-timeout.Tests.ps1's Push-Location
-  # round-trip fix (6361c2c) - a representation mismatch, not a boundary regression.
-  $wantDir5 = ((Resolve-Path (Join-Path $vault5 'outreach\staged')).Path) + '\'
+  # Round-trip through the SAME Set-Location/Get-Location resolution the code's own Get-ChildItem
+  # .FullName benefits from, not a raw string built from $env:TEMP or Resolve-Path (observed on this
+  # PS 5.1 host, Resolve-Path does NOT expand an 8.3 short-path segment the way Get-Location does).
+  # On some hosts (the GitHub Actions Windows runner, account "runneradmin") $env:TEMP is reported in
+  # 8.3 short-path form (...\RUNNER~1\...) while Set-Location + Get-Location resolves the long form
+  # (...\runneradmin\...) for the identical real directory - same class as
+  # tests/claude-generation-timeout.Tests.ps1's fix (6361c2c), same proven technique.
+  Push-Location -LiteralPath (Join-Path $vault5 'outreach\staged')
+  $wantDir5 = (Get-Location).Path + '\'
+  Pop-Location
   Assert ($recordedPath.StartsWith($wantDir5, [StringComparison]::OrdinalIgnoreCase)) `
     "the accepted fallback path must still be inside <vault>\outreach\staged\ (got $recordedPath)"
   Assert (Test-Path $recordedPath) "the recorded fallback artifact must actually exist on disk"
@@ -295,9 +298,11 @@ try {
   Assert ($manifest6Records.Count -eq 1) "the manifest must record exactly one entry"
   $recordedPath6 = $manifest6Records[0].ArtifactPath
   Assert ($recordedPath6 -match 'event-abc123-.*\.md$') "the manifest must record the agent's real filename (got $recordedPath6)"
-  # Same 8.3 short-path vs. long-path normalization as test 5 above (and 6361c2c) - resolve through
-  # the filesystem provider rather than comparing against a raw $env:TEMP-built string.
-  $wantDir6 = ((Resolve-Path $stagedDir6).Path) + '\'
+  # Same 8.3 short-path vs. long-path normalization as test 5 above (and 6361c2c) - round-trip through
+  # Set-Location/Get-Location rather than comparing against a raw $env:TEMP-built string.
+  Push-Location -LiteralPath $stagedDir6
+  $wantDir6 = (Get-Location).Path + '\'
+  Pop-Location
   Assert ($recordedPath6.StartsWith($wantDir6, [StringComparison]::OrdinalIgnoreCase)) `
     "the accepted artifact must still be inside <vault>\outreach\staged\ (got $recordedPath6)"
   $log6Text = Get-Content -LiteralPath $log6 -Raw
