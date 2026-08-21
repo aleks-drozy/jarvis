@@ -256,4 +256,87 @@ try {
   Remove-Item $log5 -Force -ErrorAction SilentlyContinue
 }
 
+# ---- Test 6 (BUG 2 / sandbox finding 2026-08-21): the agent's REAL naming convention puts the date
+# at the END of the filename (event-<hash>-<date>.md), which the old "$($t.Date)-*.md" PREFIX filter
+# never matches - Update-StagingManifest was never reached, so the same calendar event silently
+# re-invoked the paid CLI every single night forever (the actual cost bug). Detection must be a pure
+# before/after directory diff (any new .md, regardless of name), not a date-prefix filter. The staged
+# dir is pre-seeded with an unrelated pre-existing file to genuinely exercise the before/after diff. ----
+function Invoke-StagingClaudeGeneration {
+  param($Trigger, [string]$ArtifactPath, [string]$SkillDir, [int]$TimeoutSec, [string]$LogPath)
+  $global:InvokeCount++
+  $dir = Split-Path $ArtifactPath
+  New-Item -ItemType Directory -Force -Path $dir | Out-Null
+  # date at the END, unlike the given $ArtifactPath - the real agent naming convention
+  $realName = Join-Path $dir ("event-abc123-$($Trigger.Date).md")
+  Set-Content -Encoding UTF8 -LiteralPath $realName -Value "# staged prep sheet (agent's real naming)`n`nTrigger: $($Trigger.Id)"
+}
+
+$vault6 = Join-Path $env:TEMP ('jarvis-stage-t6-' + [guid]::NewGuid().ToString('N'))
+$manifest6 = Join-Path $env:TEMP ('jarvis-stage-t6-manifest-' + [guid]::NewGuid().ToString('N') + '.json')
+$log6 = Join-Path $env:TEMP ('jarvis-stage-t6-log-' + [guid]::NewGuid().ToString('N') + '.log')
+try {
+  # pre-seed the staged dir with an unrelated old file BEFORE the run so $beforeNames diff is genuinely exercised
+  $stagedDir6 = Join-Path $vault6 'outreach\staged'
+  New-Item -ItemType Directory -Force -Path $stagedDir6 | Out-Null
+  Set-Content -Encoding UTF8 -LiteralPath (Join-Path $stagedDir6 '2026-08-01-old.md') -Value "pre-existing unrelated file"
+
+  $global:InvokeCount = 0
+  $staged6 = Invoke-NightShift -Now $now -VaultPath $vault6 -SkillDir 'C:\fake-skill' `
+    -ManifestPath $manifest6 -StagingLogPath $log6 -Events @($qualifyingEvent) -Opportunities @()
+  Assert ($staged6 -eq 1) "an artifact named with the date at the END must still be recognised and staged (got $staged6)"
+  $manifest6Records = Read-StagingManifest -Path $manifest6
+  Assert ($manifest6Records.Count -eq 1) "the manifest must record exactly one entry"
+  $recordedPath6 = $manifest6Records[0].ArtifactPath
+  Assert ($recordedPath6 -match 'event-abc123-.*\.md$') "the manifest must record the agent's real filename (got $recordedPath6)"
+  $wantDir6 = (Join-Path $vault6 'outreach\staged') + '\'
+  Assert ($recordedPath6.StartsWith($wantDir6, [StringComparison]::OrdinalIgnoreCase)) `
+    "the accepted artifact must still be inside <vault>\outreach\staged\ (got $recordedPath6)"
+  $log6Text = Get-Content -LiteralPath $log6 -Raw
+  Assert ($log6Text -match 'NOTE' -and $log6Text -match 'agent used a different filename') `
+    "the staging log must record the filename mismatch NOTE (got: $log6Text)"
+
+  # THE KEY ASSERTION - re-run against the same manifest/event a second time: zero repeat paid invocations
+  $global:InvokeCount = 0
+  $staged6b = Invoke-NightShift -Now $now.AddMinutes(5) -VaultPath $vault6 -SkillDir 'C:\fake-skill' `
+    -ManifestPath $manifest6 -StagingLogPath $log6 -Events @($qualifyingEvent) -Opportunities @()
+  Assert ($global:InvokeCount -eq 0) "a second run against the same already-staged event must invoke the agent zero times (got $($global:InvokeCount)) - this is the production cost bug"
+  Assert ($staged6b -eq 0) "a second run must stage zero NEW artifacts"
+} finally {
+  Remove-Item $vault6 -Recurse -Force -ErrorAction SilentlyContinue
+  Remove-Item $manifest6 -Force -ErrorAction SilentlyContinue
+  Remove-Item $log6 -Force -ErrorAction SilentlyContinue
+}
+
+# ---- Test 7 (ambiguity guard survives the widened *.md filter): if the agent leaves TWO new
+# differently-named .md files behind (neither at the exact given path), that is genuinely ambiguous -
+# must still FAIL loudly rather than guess, exactly as before the widened diff. ----
+function Invoke-StagingClaudeGeneration {
+  param($Trigger, [string]$ArtifactPath, [string]$SkillDir, [int]$TimeoutSec, [string]$LogPath)
+  $global:InvokeCount++
+  $dir = Split-Path $ArtifactPath
+  New-Item -ItemType Directory -Force -Path $dir | Out-Null
+  Set-Content -Encoding UTF8 -LiteralPath (Join-Path $dir "event-one-$($Trigger.Date).md") -Value "ambiguous candidate one"
+  Set-Content -Encoding UTF8 -LiteralPath (Join-Path $dir "event-two-$($Trigger.Date).md") -Value "ambiguous candidate two"
+}
+
+$vault7 = Join-Path $env:TEMP ('jarvis-stage-t7-' + [guid]::NewGuid().ToString('N'))
+$manifest7 = Join-Path $env:TEMP ('jarvis-stage-t7-manifest-' + [guid]::NewGuid().ToString('N') + '.json')
+$log7 = Join-Path $env:TEMP ('jarvis-stage-t7-log-' + [guid]::NewGuid().ToString('N') + '.log')
+try {
+  $global:InvokeCount = 0
+  $staged7 = Invoke-NightShift -Now $now -VaultPath $vault7 -SkillDir 'C:\fake-skill' `
+    -ManifestPath $manifest7 -StagingLogPath $log7 -Events @($qualifyingEvent) -Opportunities @()
+  Assert ($staged7 -eq 0) "two ambiguous new files must NOT be silently accepted (got $staged7)"
+  $manifest7Records = @(Read-StagingManifest -Path $manifest7)
+  Assert ($manifest7Records.Count -eq 0) "an ambiguous result must not produce a manifest entry"
+  $log7Text = Get-Content -LiteralPath $log7 -Raw
+  Assert ($log7Text -match 'FAILED' -and $log7Text -match 'ambiguous') `
+    "the staging log must record the ambiguity as a failure (got: $log7Text)"
+} finally {
+  Remove-Item $vault7 -Recurse -Force -ErrorAction SilentlyContinue
+  Remove-Item $manifest7 -Force -ErrorAction SilentlyContinue
+  Remove-Item $log7 -Force -ErrorAction SilentlyContinue
+}
+
 Write-Host "stage-prep: ALL PASS"

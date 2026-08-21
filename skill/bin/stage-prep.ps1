@@ -318,9 +318,11 @@ function Invoke-NightShift {
     # LIVE-VERIFICATION FINDING (2026-08-20): a real headless run wrote a genuine, well-grounded
     # artifact but under its OWN shortened filename instead of the exact path it was given, and the
     # strict Test-Path check below then discarded a perfectly good result as a failure. Record what
-    # already existed in the staged dir BEFORE this call, so a same-directory, same-date, differently-
-    # named file can still be recognised as a legitimate (if imperfectly-named) result rather than
-    # silently lost - the safety boundary (the directory itself) is unaffected either way.
+    # already existed in the staged dir BEFORE this call, so a same-directory, differently-named file
+    # can still be recognised as a legitimate (if imperfectly-named) result rather than silently lost -
+    # the safety boundary (the directory itself) is unaffected either way.
+    # (2026-08-21 follow-up: the agent's real convention put the date at the END of the filename, so a
+    # date-PREFIX filter never matched - detection is now a pure before/after directory diff.)
     $beforeNames = @()
     if (Test-Path -LiteralPath $stagedDir) {
       $beforeNames = @((Get-ChildItem -LiteralPath $stagedDir -Filter '*.md' -File -ErrorAction SilentlyContinue).Name)
@@ -332,7 +334,7 @@ function Invoke-NightShift {
       if (-not (Test-Path -LiteralPath $artifactPath)) {
         $newFiles = @()
         if (Test-Path -LiteralPath $stagedDir) {
-          $newFiles = @(Get-ChildItem -LiteralPath $stagedDir -Filter "$($t.Date)-*.md" -File -ErrorAction SilentlyContinue |
+          $newFiles = @(Get-ChildItem -LiteralPath $stagedDir -Filter '*.md' -File -ErrorAction SilentlyContinue |
             Where-Object { $beforeNames -notcontains $_.Name })
         }
         if ($newFiles.Count -eq 1) {
