@@ -285,6 +285,84 @@ function Send-DebriefChannels {
   [pscustomobject]@{ Sent = $sent; Errors = $errors }
 }
 
+function Send-FailureAlert {
+  # 2026-08-20: the 08-09..08-15 six-day 403 outage proved the fail-closed design (F1/F6/etc.) works
+  # exactly as built - every failed run correctly logged "run FAILED" and left a "Debrief FAILED" note
+  # stub instead of faking a debrief - but NOTHING pushed that off-machine, so six days of failures
+  # reached Alex's phone as silence, not as a message. This closes that gap. Deliberately dumb by
+  # design (DECISIONS.md 2026-08-20): a FIXED, code-composed string, never LLM output, so it is immune
+  # to the exact failure class (a headless-auth 403) that caused the incident, and can never become an
+  # agent write to the health log (SKILL.md Safety rule 8 - the agent never touches this file; neither
+  # does this function's caller ask an agent to). No retry/backoff and no API-key fallback - both
+  # explicitly rejected in DECISIONS.md: a policy-class error is deterministic, and switching auth
+  # modes is Alex's deliberate call, not an automatic fallback.
+  #
+  # Threshold 2: a single failure is the 09:15 catch-up trigger's job to quietly retry; two consecutive
+  # failures is a pattern worth waking a human for. Same-day dedupe on an "alert sent" line means the
+  # 08:30 and 09:15 triggers hitting this on the same bad morning still only alert once.
+  param(
+    [Parameter(Mandatory)][string]$RunLog,
+    [Parameter(Mandatory)][string]$ErrorMessage,
+    [string]$ToAddress
+  )
+  if (-not (Test-Path -LiteralPath $RunLog)) { return }
+  $lines = @(Get-Content -LiteralPath $RunLog -ErrorAction SilentlyContinue)
+
+  # Walk the tail backward counting consecutive trailing "run FAILED" lines, stopping at the first
+  # "run ok" / "run skipped" line. Mirrors the line-format convention app/lib/livestate.js's
+  # parseLogTail already established for THIS SAME FILE ("<ts> run <start|ok|FAILED>...") rather than
+  # inventing a second parser style for it. Any other line (a "run start", a "claude-version" line, or
+  # this function's own "alert sent"/"alert FAILED" lines below, which deliberately do not start with
+  # "run ") does not break the streak and does not count toward it either.
+  $count = 0
+  for ($i = $lines.Count - 1; $i -ge 0; $i--) {
+    $l = $lines[$i]
+    if ($l -match '^\S+\s+run FAILED\b') { $count++; continue }
+    if ($l -match '^\S+\s+run (ok|skipped)\b') { break }
+  }
+  if ($count -lt 2) { return }
+
+  $today = Get-Date -Format 'yyyy-MM-dd'
+  $alreadyAlerted = $lines | Where-Object { $_.StartsWith($today) -and $_ -match '\balert sent\b' }
+  if ($alreadyAlerted) { return }
+
+  $errSnippet = $ErrorMessage
+  if ($errSnippet.Length -gt 300) { $errSnippet = $errSnippet.Substring(0, 300) }
+  $msg = "JARVIS ALERT: morning debrief has FAILED $count consecutive runs. Last error: $errSnippet. " +
+    "No debrief was delivered. Check debriefs/.jarvis-runs.log on the laptop."
+
+  $sentAny = $false
+  $failReasons = @()
+
+  # Telegram: Send-Telegram is the raw-text send that Send-DebriefTelegram itself wraps - called
+  # directly here (rather than through Send-DebriefTelegram) because this alert has no note FILE to
+  # read, only a fixed string. Bot token/chat id stay locked in code exactly as for the normal debrief
+  # send (Get-TelegramCred + the self-only guard inside Send-Telegram).
+  try { Send-Telegram -Text $msg | Out-Null; $sentAny = $true }
+  catch { $failReasons += "telegram: $($_.Exception.Message)" }
+
+  # Email: Send-Debrief only knows how to mail a NOTE FILE (it reads -NotePath to build the body), so
+  # the fixed alert string is written to a throwaway temp note and handed through it unchanged. This
+  # still goes through Send-Debrief's own self-only recipient lock (Safety rule 2), untouched.
+  $tmpNote = $null
+  try {
+    $tmpNote = Join-Path $env:TEMP ('jarvis-alert-' + [guid]::NewGuid().ToString('N') + '.md')
+    Set-Content -LiteralPath $tmpNote -Value $msg -Encoding UTF8
+    Send-Debrief -NotePath $tmpNote -ToAddress $ToAddress
+    $sentAny = $true
+  } catch { $failReasons += "email: $($_.Exception.Message)" }
+  finally { if ($tmpNote) { Remove-Item -LiteralPath $tmpNote -Force -ErrorAction SilentlyContinue } }
+
+  # These lines must NOT begin with "run " - both this function's own consecutive-FAILED walk above
+  # and app/lib/livestate.js's parseLogTail (RUN_LINE_RE) key off that exact prefix, and an alert line
+  # that matched it would corrupt either parser's view of run status.
+  if ($sentAny) {
+    "$([datetime]::Now.ToString('s')) alert sent ($count consecutive failures)" | Add-Content $RunLog
+  } else {
+    "$([datetime]::Now.ToString('s')) alert FAILED: $($failReasons -join '; ')" | Add-Content $RunLog
+  }
+}
+
 $lockFile      = Join-Path $HOME '.jarvis\debrief.lock'
 $heartbeatFile = Join-Path $HOME '.jarvis\debrief-heartbeat.json'
 $lockTaken = $false
@@ -416,6 +494,16 @@ try {
 } catch {
   $err = $_.Exception.Message
   "$([datetime]::Now.ToString('s')) run FAILED: $err" | Add-Content $runLog
+  # Consecutive-failure push alert (2026-08-20). Own try/catch so a broken alerter can NEVER disturb
+  # the FAILED-logging path above or the stub-note/toast below - the whole point of this addition is
+  # to make failures louder, not to introduce a new way for a run to fail worse. Both senders are
+  # (re-)dot-sourced here, defensively, because a failure this early (e.g. no Claude token) can occur
+  # BEFORE the main try block's own dot-sourcing of $sender/telegram-bot.ps1 ever runs.
+  try {
+    . $sender -DotSourceOnly
+    . (Join-Path $PSScriptRoot 'telegram-bot.ps1') -DotSourceOnly
+    Send-FailureAlert -RunLog $runLog -ErrorMessage $err -ToAddress $OwnerEmail
+  } catch { }
   # Leave a VISIBLE stub so a failed morning can't masquerade as a quiet day. Only if generation
   # produced no note; on a send-only failure the real (unsent) note is kept and the log/toast alarm.
   if (-not (Test-Path $note)) {
