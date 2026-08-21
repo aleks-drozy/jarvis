@@ -55,6 +55,21 @@ function Test-ChatEnabled {
 # be a read-only script that takes NO arguments derived from message text.
 $script:JarvisChatCollectors = @('bank','jobmail','calendar')
 
+# BURST-WINDOW CACHE TTLs, in seconds, per collector. This caps re-collection frequency during a
+# warm-window conversation (telegram-bot.ps1's Invoke-PollOnce keeps one process long-polling up to
+# 5 minutes, re-armed per chat turn) - NOT a staleness fix for the 08:30 debrief, which this file has
+# no shared artifact with in the first place (each chat turn already collects fresh, every turn).
+#   bank     = 300s. Matches the warm-window length: one live PSD2 AIS call per 5-minute conversation
+#              instead of one per question, and any question arriving on a later scheduled tick still
+#              re-collects.
+#   jobmail  = 300s. Not rate-limited on its own, but the slowest collector (raw TcpClient, up to 40
+#              messages) - burst reuse buys latency, and a 5-minute-old mail listing is immaterial.
+#   calendar = 0.    Cheap, not rate-limited, and the one collector where a minutes-old answer can be
+#              visibly wrong mid-conversation ("what's on today" right after adding an event). 0 means
+#              always collect; keeping it in the table makes future tuning a one-number edit instead
+#              of new code.
+$script:JarvisChatPrefetchTtlSec = @{ bank = 300; jobmail = 300; calendar = 0 }
+
 function Get-ChatPrefetch {
   # Decide which read-only collectors this message needs. Returns NAMES from $JarvisChatCollectors,
   # never a command line and never an argument. That is the whole trick: untrusted text selects from a
@@ -168,6 +183,81 @@ function Get-ChatBankScopeNote {
   )
 }
 
+function Get-ChatPrefetchCachePath {
+  # Sibling of bank-heartbeat.json, under the same ~/.jarvis directory Test-ChatScopeNarrow rule (b)
+  # already guarantees is outside the agent's --add-dir scope - the model can never read this cache
+  # itself, only the PowerShell layer that writes and reads it here.
+  return (Join-Path $HOME '.jarvis\chat-prefetch-cache.json')
+}
+
+function Read-ChatPrefetchCacheEntry {
+  # Burst-window cache read. Returns @{ Output; At } on a fresh hit, $null otherwise - file missing,
+  # unparseable, entry absent, TtlSec -le 0 (calendar's always-miss row), the entry aged past TTL, or
+  # a FUTURE timestamp relative to -Now. That last case is a clock-change guard: a future timestamp
+  # must read as stale, never as fresh - the alternative would let a clock adjustment serve arbitrarily
+  # old data as though it were still current.
+  # The whole body sits in one try/catch returning $null: a broken cache degrades to "collect fresh",
+  # never throws, matching this file's never-throw discipline for everything downstream of a collector.
+  param(
+    [string]$Name,
+    [string]$Path,
+    [int]$TtlSec,
+    [datetime]$Now = (Get-Date)
+  )
+  try {
+    if ($TtlSec -le 0) { return $null }
+    if (-not (Test-Path -LiteralPath $Path)) { return $null }
+    $raw = Get-Content -LiteralPath $Path -Raw -ErrorAction Stop
+    if (-not $raw -or -not $raw.Trim()) { return $null }
+    $data = $raw | ConvertFrom-Json -ErrorAction Stop
+    if ($null -eq $data) { return $null }
+    if (-not ($data.PSObject.Properties.Name -contains $Name)) { return $null }
+    $entry = $data.$Name
+    if ($null -eq $entry) { return $null }
+    if (-not ($entry.PSObject.Properties.Name -contains 'at') -or -not ($entry.PSObject.Properties.Name -contains 'output')) { return $null }
+    $at = [datetime]::Parse([string]$entry.at, [System.Globalization.CultureInfo]::InvariantCulture, [System.Globalization.DateTimeStyles]::RoundtripKind)
+    if ($at -gt $Now) { return $null }
+    if (($Now - $at).TotalSeconds -ge $TtlSec) { return $null }
+    return @{ Output = [string]$entry.output; At = $at }
+  } catch {
+    return $null
+  }
+}
+
+function Write-ChatPrefetchCacheEntry {
+  # Read-modify-write of the whole cache file, so one collector's write never clobbers another's
+  # entry. No locking (see DECISIONS.md): overlapping chat processes are already rare by design, and
+  # the worst race outcome is a lost update - one extra live call next turn, never corrupted data,
+  # since the write below is a single Set-Content of a freshly-serialized, complete object.
+  # Never throws: a failed cache write must never fail the turn.
+  param(
+    [string]$Name,
+    [string]$Output,
+    [string]$Path,
+    [datetime]$Now = (Get-Date)
+  )
+  try {
+    $data = [ordered]@{}
+    if (Test-Path -LiteralPath $Path) {
+      try {
+        $raw = Get-Content -LiteralPath $Path -Raw -ErrorAction Stop
+        if ($raw -and $raw.Trim()) {
+          $parsed = $raw | ConvertFrom-Json -ErrorAction Stop
+          if ($parsed) {
+            foreach ($p in $parsed.PSObject.Properties) { $data[$p.Name] = $p.Value }
+          }
+        }
+      } catch {
+        $data = [ordered]@{}   # corrupt existing file -> start fresh rather than fail the write
+      }
+    }
+    $data[$Name] = @{ at = $Now.ToString('o'); output = $Output }
+    $dir = Split-Path $Path
+    if ($dir -and -not (Test-Path $dir)) { New-Item -ItemType Directory -Force -Path $dir | Out-Null }
+    ($data | ConvertTo-Json -Depth 5) | Set-Content -Encoding UTF8 -LiteralPath $Path
+  } catch { }
+}
+
 function Invoke-ChatPrefetch {
   # Run the named collectors and return their output as a labelled text block for the prompt fence.
   # Each is invoked with NO arguments - nothing from the message is passed through. A collector that
@@ -184,7 +274,9 @@ function Invoke-ChatPrefetch {
     [string[]]$Names,
     [string]$BinDir,
     [string]$HeartbeatPath = (Join-Path $HOME '.jarvis\bank-heartbeat.json'),
-    [int]$BudgetSec = 60
+    [int]$BudgetSec = 60,
+    [string]$CachePath = (Get-ChatPrefetchCachePath),
+    [hashtable]$TtlSec = $script:JarvisChatPrefetchTtlSec
   )
   if (-not $Names -or $Names.Count -eq 0) { return '' }
   $scripts = @{
@@ -199,6 +291,18 @@ function Invoke-ChatPrefetch {
     $path = Join-Path $BinDir $scripts[$n]
     [void]$sb.AppendLine("## collector: $n")
     if (-not (Test-Path $path)) { [void]$sb.AppendLine("unavailable: $($scripts[$n]) not found"); continue }
+    # THE BURST CACHE. Checked before the shared wall-clock budget, and a hit consumes none of it -
+    # the budget exists to protect against hung CHILDREN, and a cache hit spawns none. Only a
+    # collector that succeeded cleanly on its last run is ever cached (see the write below), so an
+    # outage is still re-probed every turn rather than served stale for the TTL window.
+    $ttlForName = 0
+    if ($TtlSec -and $TtlSec.ContainsKey($n)) { $ttlForName = [int]$TtlSec[$n] }
+    $cached = Read-ChatPrefetchCacheEntry -Name $n -Path $CachePath -TtlSec $ttlForName -Now (Get-Date)
+    if ($null -ne $cached) {
+      [void]$sb.AppendLine((Protect-CollectorDelimiter $cached.Output))
+      [void]$sb.AppendLine("(cached: collected at $($cached.At.ToString('s')) local, reused within the ${ttlForName}s window)")
+      continue
+    }
     $remaining = ($deadline - (Get-Date)).TotalSeconds
     if ($remaining -le 0) { [void]$sb.AppendLine('unavailable: timed out'); continue }
     try {
@@ -212,7 +316,16 @@ function Invoke-ChatPrefetch {
       # failure IN-BAND as {"error": "..."} - a clean exit code alone would miss this.
       $errMsg = Test-CollectorErrorJson $res
       if ($errMsg) { [void]$sb.AppendLine("unavailable: $(Protect-CollectorDelimiter $errMsg)") }
-      else { [void]$sb.AppendLine((Protect-CollectorDelimiter $res)) }
+      else {
+        [void]$sb.AppendLine((Protect-CollectorDelimiter $res))
+        # SUCCESS ONLY: never cache a timeout, a non-zero exit, empty output, or an in-band error/
+        # not-configured signal - those must be re-probed every turn, not served stale for the TTL
+        # window. Store the RAW trimmed stdout; Protect-CollectorDelimiter runs again on every READ
+        # (above), since jobmail's cached content is attacker-influenced email-subject text and the
+        # neutralisation must sit between the cache and the prompt - it is idempotent, so a line
+        # already neutralised on write stays neutralised on read.
+        Write-ChatPrefetchCacheEntry -Name $n -Output $res -Path $CachePath -Now (Get-Date)
+      }
     } catch {
       [void]$sb.AppendLine("unavailable: $(Protect-CollectorDelimiter $_.Exception.Message)")
     }
